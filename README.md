@@ -86,6 +86,8 @@ All of `server/.env` is optional. The app boots and plays without any of it.
 | `PORT` | `5000` | API + socket port. |
 | `HOST` | `0.0.0.0` | Interface to bind. |
 | `CLIENT_ORIGIN` | `http://localhost:5173` | Comma-separated allowed origins. |
+| `RENDER_EXTERNAL_URL` / `PUBLIC_URL` | – | The app's own public URL. Trusted automatically, so a one-click deploy needs no CORS setup. Render sets the first for you. |
+| `VITE_API_URL` | – | **Client build-time.** Only needed when the client is hosted apart from the server (e.g. Vercel). Set it to the server's origin. |
 | `ALLOW_LAN_ORIGINS` | on in dev, off in prod | Lets private LAN addresses (`192.168.*`, `10.*`, `172.16–31.*`) call the API, so phones on your wifi can join. |
 | `TRUST_PROXY_HOPS` | `1` | Proxy hops in front of the app, so rate limiting sees the real client IP. |
 | `MAX_ROOMS` / `MAX_TEAMS_PER_ROOM` / `MAX_MEMBERS_PER_TEAM` | `500` / `12` / `8` | Capacity ceilings. |
@@ -137,20 +139,50 @@ have no table, so they always land in the room channel.
 
 ## Running it for real
 
+### Render (recommended — one click, everything on one origin)
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/MR-SAIRAM-7/Ipl-auction-game)
+
+`render.yaml` is a Blueprint: point Render at this repo, and it builds the client,
+installs the server and serves both from one origin. `autoDeploy` is on, so every push
+to `main` ships.
+
+Render supplies `PORT` and `RENDER_EXTERNAL_URL`, and the server trusts its own public
+URL automatically — **CORS needs no hand-editing for this setup**. Everything else is
+optional: set `GEMINI_API_KEY` for an AI-picked pool and `MONGODB_URI` so rooms survive
+the free plan going to sleep.
+
+On the free plan the instance sleeps when idle and cold-starts in about a minute. An
+auction in progress keeps it awake on its own, because the sockets ping every 25s.
+
+### Vercel (client only — it cannot host the server)
+
+Vercel runs serverless functions, with **no WebSocket server and no process that lives
+between requests**. This app's auction clock and rooms live in server memory, so the
+server cannot go there. The React client can:
+
+1. Import the repo into Vercel. `vercel.json` already sets the build and the SPA
+   rewrites, so there is nothing to configure.
+2. Deploy the **server** to Render (above) or any Node host.
+3. Set `VITE_API_URL` in Vercel to that server's origin, e.g.
+   `https://your-app.onrender.com`. It is read at build time, so redeploy after adding it.
+4. Set `CLIENT_ORIGIN` on the server to your Vercel URL, so it accepts the browser.
+
+Skip all of this unless you specifically want the client on Vercel's CDN — the Render
+deploy already serves it.
+
 ### Docker
 
 ```bash
 docker compose up --build
 ```
 
-That builds the client, installs production-only server dependencies and serves both
-from one origin on port 5000, as a non-root user with a health check wired up. Pass
-your keys through the environment (see `docker-compose.yml`), and set `CLIENT_ORIGIN`
-to the public URL people will actually load.
+Builds the client, installs production-only server dependencies and serves both from one
+origin on port 5000, as a non-root user with a health check wired up.
 
 ### Anywhere else
 
-Any host that runs Node 20+ and allows WebSockets works:
+Any host that runs Node 20+ and allows WebSockets:
 
 ```bash
 npm run install:all
@@ -160,12 +192,18 @@ NODE_ENV=production CLIENT_ORIGIN=https://your-domain node server/src/index.js
 
 Three things worth getting right:
 
-- **WebSockets must pass through.** The auction is Socket.IO; a proxy that buffers or
-  strips upgrades will leave everyone stuck on "Reconnecting".
-- **Set `CLIENT_ORIGIN`** to the public origin. In production, LAN origins are refused
+- **WebSockets must pass through.** A proxy that buffers or strips upgrades leaves
+  everyone stuck on "Reconnecting".
+- **Set `CLIENT_ORIGIN`** to the public origin, unless the host publishes
+  `RENDER_EXTERNAL_URL` or you set `PUBLIC_URL`. In production, LAN origins are refused
   unless you opt back in with `ALLOW_LAN_ORIGINS=true`.
-- **Set `MONGODB_URI`** if you want rooms to survive a restart or a second instance.
-  Without it rooms live in the process, so a deploy ends any auction in flight.
+- **Set `MONGODB_URI`** if you want rooms to survive a restart.
+
+### Continuous integration
+
+`.github/workflows/ci.yml` builds the client and runs the integration suite on every
+push and pull request to `main`, so a broken auction engine fails before it deploys. The
+five-minute full-game test is left out of CI; run it locally with `npm run test:game`.
 
 ### What is protected
 

@@ -27,10 +27,31 @@ const allowLan = process.env.ALLOW_LAN_ORIGINS
   ? process.env.ALLOW_LAN_ORIGINS !== 'false'
   : !isProd;
 
-const origins = (process.env.CLIENT_ORIGIN || 'http://localhost:5173,http://127.0.0.1:5173')
-  .split(',')
-  .map((s) => s.trim())
+/**
+ * Hosts that publish the app's own public URL are trusted automatically, so a
+ * one-click deploy works without anyone hand-editing CLIENT_ORIGIN first. Render
+ * sets RENDER_EXTERNAL_URL; PUBLIC_URL is the generic escape hatch.
+ */
+const selfOrigins = [process.env.RENDER_EXTERNAL_URL, process.env.PUBLIC_URL]
+  .filter(Boolean)
+  .map((url) => {
+    try {
+      return new URL(url).origin;
+    } catch {
+      return null;
+    }
+  })
   .filter(Boolean);
+
+const origins = [
+  ...new Set([
+    ...(process.env.CLIENT_ORIGIN || 'http://localhost:5173,http://127.0.0.1:5173')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean),
+    ...selfOrigins,
+  ]),
+];
 
 const LAN_ORIGIN =
   /^https?:\/\/(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+)(:\d+)?$/;

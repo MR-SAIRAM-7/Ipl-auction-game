@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Build and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install server dependencies
+        run: npm --prefix server ci
+
+      - name: Install client dependencies
+        run: npm --prefix client ci
+
+      - name: Build the client
+        run: npm --prefix client run build
+
+      # Boots the real server on a spare port and drives it over HTTP and sockets.
+      # The full 9-player game (npm run test:game) is left out: it waits out real
+      # 60 second lot clocks and takes about five minutes on its own.
+      - name: Integration tests
+        run: npm --prefix server test

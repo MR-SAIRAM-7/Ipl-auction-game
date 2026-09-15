@@ -1,0 +1,52 @@
+# Render Blueprint: https://render.com/docs/blueprint-spec
+#
+# Deploys the whole app as ONE service on ONE origin - the Node server serves the
+# built React client alongside the API and the auction sockets. That is the shape
+# this app wants: rooms and the auction clock live in the server's memory, so it
+# must be a single always-on process, not a set of functions.
+#
+# Render sets PORT and RENDER_EXTERNAL_URL itself, and the server trusts its own
+# public URL automatically, so CORS needs no hand-editing for this setup.
+
+services:
+  - type: web
+    name: ipl-auction
+    runtime: node
+    plan: free
+    # Closest free region to India. Also: oregon, ohio, virginia, frankfurt.
+    region: singapore
+    branch: main
+    autoDeploy: true
+
+    buildCommand: npm --prefix server install --omit=dev && npm --prefix client install && npm --prefix client run build
+    startCommand: node server/src/index.js
+    healthCheckPath: /api/health
+
+    envVars:
+      - key: NODE_ENV
+        value: production
+
+      # Optional. Without a key the built-in roster of real cricketers is used and
+      # the final verdict comes from the local balance model.
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash
+
+      # Optional but recommended on a free plan: the instance sleeps when idle, and
+      # without a database every room in memory goes with it.
+      - key: MONGODB_URI
+        sync: false
+
+      # Only needed if you host the client somewhere else (e.g. Vercel). Set it to
+      # that origin, comma-separated for more than one.
+      - key: CLIENT_ORIGIN
+        sync: false
+
+      # Optional TURN server, for voice between people behind strict NATs.
+      - key: TURN_URL
+        sync: false
+      - key: TURN_USERNAME
+        sync: false
+      - key: TURN_CREDENTIAL
+        sync: false
