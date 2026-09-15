@@ -1,0 +1,13 @@
+node_modules
+*/node_modules
+**/dist
+.git
+.claude
+*.log
+.env
+.env.*
+!.env.example
+coverage
+.vite
+.DS_Store
+README.md

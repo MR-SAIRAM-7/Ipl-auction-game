@@ -1,0 +1,19 @@
+services:
+  app:
+    build: .
+    ports:
+      - "5000:5000"
+    environment:
+      NODE_ENV: production
+      PORT: 5000
+      # The public origin(s) the browser loads the app from.
+      CLIENT_ORIGIN: ${CLIENT_ORIGIN:-http://localhost:5000}
+      # Optional. Without them the app uses its offline generators / in-memory rooms.
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
+      MONGODB_URI: ${MONGODB_URI:-}
+      # Optional TURN server for voice across strict NATs.
+      TURN_URL: ${TURN_URL:-}
+      TURN_USERNAME: ${TURN_USERNAME:-}
+      TURN_CREDENTIAL: ${TURN_CREDENTIAL:-}
+    restart: unless-stopped
