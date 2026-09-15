@@ -8,7 +8,7 @@ import cors from 'cors';
 import { Server } from 'socket.io';
 
 import { connectDB } from './config/db.js';
-import apiRoutes from './routes/rooms.js';
+import apiRoutes, { turnConfigured } from './routes/rooms.js';
 import { registerSockets } from './sockets/index.js';
 import { sweepIdleRooms } from './services/roomStore.js';
 import { geminiEnabled } from './services/gemini.js';
@@ -134,13 +134,18 @@ server.listen(PORT, HOST, () => {
   console.log(`  IPL Auction server listening on http://localhost:${PORT}`);
   console.log(`  Mode:    ${isProd ? 'production' : 'development'}`);
   console.log(`  Client:  ${hasClient ? 'serving built client from client/dist' : 'not built (run npm run build)'}`);
-  console.log(`  Gemini:  ${geminiEnabled() ? 'enabled' : 'disabled (using local generator)'}`);
+  console.log(`  Gemini:  ${geminiEnabled() ? 'enabled' : 'disabled (using local roster)'}`);
+  console.log(`  Voice:   ${turnConfigured() ? 'STUN + TURN relay' : 'STUN only - will not connect on mobile data'}`);
   console.log(`  Origins: ${origins.join(', ')}${allowLan ? ' (+ LAN)' : ''}`);
   if (isProd && !hasClient) {
     console.warn('  WARNING: production start with no built client - run "npm run build" first.');
   }
   if (isProd && origins.includes('*')) {
     console.warn('  WARNING: CLIENT_ORIGIN is "*", which allows any site to call this API.');
+  }
+  if (isProd && !turnConfigured()) {
+    console.warn('  NOTE: no TURN server set. Voice works on wifi but will fail between');
+    console.warn('        people on mobile data (carrier NAT has no direct path).');
   }
   console.log('');
 });

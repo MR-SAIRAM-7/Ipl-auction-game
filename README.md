@@ -95,7 +95,7 @@ All of `server/.env` is optional. The app boots and plays without any of it.
 | `GEMINI_API_KEY` | – | Enables AI player generation, the final verdict and auctioneer commentary. Get one free at <https://aistudio.google.com/apikey>. |
 | `GEMINI_MODEL` | `gemini-2.5-flash` | Any Gemini model id. |
 | `GEMINI_COMMENTARY` | `true` | Set to `false` to skip the one-line auctioneer commentary after each sale. |
-| `TURN_URL` / `TURN_USERNAME` / `TURN_CREDENTIAL` | – | Optional TURN server, needed for voice between friends behind strict NATs. |
+| `TURN_URLS` / `TURN_USERNAME` / `TURN_CREDENTIAL` | – | TURN relay, comma-separated URLs. **Required for voice on mobile data.** `TURN_URL` is still accepted for a single entry. |
 
 ---
 
@@ -123,6 +123,43 @@ Each franchise has its own huddle and there is one room-wide channel. The mesh o
 a single channel, so a huddle is genuinely private - it is not a client-side mute. Spectators
 have no table, so they always land in the room channel.
 
+### Voice on mobile data
+
+This is the one part of the app that cannot be fixed in the client, so it is worth
+being precise about.
+
+WebRTC sends audio peer to peer. STUN only tells each peer its own public address —
+enough when at least one side is behind a permissive NAT, which is the usual case on
+home wifi. **Mobile carriers use CGNAT, which is symmetric**: the port one peer sees is
+not the port anyone else can reach. Two phones on mobile data therefore have no direct
+path at all, and no amount of retrying will find one.
+
+The fix is a **TURN server**, which relays the audio. Set:
+
+```bash
+TURN_URLS=turn:host:3478?transport=udp,turn:host:3478?transport=tcp,turns:host:443?transport=tcp
+TURN_USERNAME=...
+TURN_CREDENTIAL=...
+```
+
+List all three transports. The `turns:` entry on 443 looks like ordinary HTTPS, which is
+what gets through hotel, office and campus firewalls that block everything else.
+
+Where to get one:
+
+- **Metered / Twilio / Xirsys** — hosted TURN, metered per GB, with small free tiers.
+  Voice is a few MB per person-hour, so a friends' game costs very little.
+- **Cloudflare Calls** — TURN with a free allowance.
+- **Self-host `coturn`** on any VPS — one package, one config file, cheapest at volume.
+
+The server prints which mode it is in at boot (`Voice: STUN only` vs `STUN + TURN
+relay`), and warns in production when TURN is missing. In the app, a peer that cannot be
+reached is reported in the voice dock rather than silently failing, and people connected
+through the relay get a marker on their avatar.
+
+**Bidding, chat and the auction itself never need TURN** — they run over the server
+socket, which is plain HTTPS. Only the peer-to-peer audio is affected.
+
 ### How the call holds up
 
 - **Reconnects.** A dropout hands the browser a new socket id, which orphans every peer
@@ -134,6 +171,13 @@ have no table, so they always land in the room channel.
   deadlock each other; perfect negotiation settles who backs down.
 - **Autoplay.** If the browser blocks remote audio, the dock offers an **Enable sound**
   button instead of silently playing nothing.
+- **Switching networks.** Moving between wifi and mobile data invalidates every gathered
+  candidate. The app watches `online` and connection-change events and restarts ICE, so
+  the call recovers instead of staying up but silent.
+- **Phone locked or tab hidden.** Mobile browsers suspend audio; the app resumes it and
+  re-checks its peers when the tab comes back.
+- **Unreachable peers.** A connection that never completes is retried twice with an ICE
+  restart, then reported plainly — naming TURN as the likely cause when none is set.
 
 ---
 

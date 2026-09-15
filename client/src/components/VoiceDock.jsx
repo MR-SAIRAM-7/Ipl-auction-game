@@ -76,14 +76,22 @@ export default function VoiceDock() {
                   className="voice-av"
                   data-speaking={!p.muted && (voice.levels[p.socketId] || 0) > SPEAKING_THRESHOLD}
                   style={{ background: p.color, color: textOn(p.color) }}
-                  title={p.teamName && voice.channel === 'room' ? `${p.name} · ${p.teamName}` : p.name}
+                  title={`${p.teamName && voice.channel === 'room' ? `${p.name} · ${p.teamName}` : p.name}${
+                    voice.routes[p.socketId] === 'relay' ? ' · relayed' : ''
+                  }`}
                 >
                   {p.name.slice(0, 2).toUpperCase()}
                   {p.muted ? <span className="mic-off" /> : null}
+                  {voice.routes[p.socketId] === 'relay' ? <span className="relayed" title="Relayed via TURN" /> : null}
                 </div>
               ))}
             </div>
             <p className="dim" style={{ fontSize: 11, marginTop: 4 }}>{summary()}</p>
+            {voice.reachability ? (
+              <p style={{ fontSize: 11, marginTop: 3, color: 'var(--warn)', lineHeight: 1.4 }}>
+                {voice.reachability}
+              </p>
+            ) : null}
           </>
         ) : (
           <>

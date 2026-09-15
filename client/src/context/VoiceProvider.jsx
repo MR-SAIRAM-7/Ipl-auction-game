@@ -15,6 +15,9 @@ export const useVoiceSession = () => useContext(VoiceContext);
  */
 export function VoiceProvider({ children }) {
   const { serverConfig } = useGame();
-  const voice = useVoice({ iceServers: serverConfig?.iceServers });
+  const voice = useVoice({
+    iceServers: serverConfig?.iceServers,
+    turnAvailable: Boolean(serverConfig?.turn),
+  });
   return <VoiceContext.Provider value={voice}>{children}</VoiceContext.Provider>;
 }

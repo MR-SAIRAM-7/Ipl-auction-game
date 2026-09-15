@@ -43,8 +43,10 @@ services:
       - key: CLIENT_ORIGIN
         sync: false
 
-      # Optional TURN server, for voice between people behind strict NATs.
-      - key: TURN_URL
+      # TURN relay. Voice works on home wifi without it, but two people on MOBILE
+      # DATA have no direct path to each other and need a relay to connect at all.
+      # Comma-separated; list udp, tcp and a turns:443 entry for restrictive networks.
+      - key: TURN_URLS
         sync: false
       - key: TURN_USERNAME
         sync: false

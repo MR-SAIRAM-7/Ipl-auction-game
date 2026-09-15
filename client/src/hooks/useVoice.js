@@ -23,10 +23,13 @@ const REJOIN_ATTEMPTS = 8;
 const REJOIN_DELAY_MS = 500;
 /** If a newcomer's offer never lands, an existing peer takes over and offers instead. */
 const OFFER_RESCUE_MS = 4000;
+/** How long a peer may sit un-connected before we retry the whole ICE negotiation. */
+const CONNECT_TIMEOUT_MS = 12_000;
+const CONNECT_RETRIES = 2;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-export function useVoice({ iceServers }) {
+export function useVoice({ iceServers, turnAvailable = false }) {
   const [joined, setJoined] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [muted, setMuted] = useState(false);
@@ -38,6 +41,10 @@ export function useVoice({ iceServers }) {
   const [channel, setChannel] = useState('team');
   /** Our own socket id, which is how we pick ourselves out of the broadcast roster. */
   const [selfId, setSelfId] = useState(null);
+  /** socketId -> 'host' | 'srflx' | 'relay', so the UI can show how audio is travelling. */
+  const [routes, setRoutes] = useState({});
+  /** Set when a peer cannot be reached at all, with the likely reason. */
+  const [reachability, setReachability] = useState(null);
 
   const localStream = useRef(null);
   /** socketId -> { pc, polite, makingOffer, ignoreOffer } */
@@ -45,6 +52,7 @@ export function useVoice({ iceServers }) {
   const audioEls = useRef(new Map());
   const pendingIce = useRef(new Map());
   const rescueTimers = useRef(new Map());
+  const watchdogs = useRef(new Map());
   const audioCtx = useRef(null);
   const analysers = useRef(new Map());
   const rafRef = useRef(null);
@@ -52,10 +60,19 @@ export function useVoice({ iceServers }) {
   const rejoiningRef = useRef(false);
   const channelRef = useRef('team');
 
-  const config = useRef({ iceServers: iceServers || [{ urls: 'stun:stun.l.google.com:19302' }] });
+  const config = useRef({
+    iceServers: iceServers || [{ urls: 'stun:stun.l.google.com:19302' }],
+    // Gather a candidate up front so the first offer is not waiting on the network.
+    iceCandidatePoolSize: 1,
+  });
   useEffect(() => {
-    if (iceServers?.length) config.current = { iceServers };
+    if (iceServers?.length) config.current = { ...config.current, iceServers };
   }, [iceServers]);
+
+  const turnRef = useRef(turnAvailable);
+  useEffect(() => {
+    turnRef.current = turnAvailable;
+  }, [turnAvailable]);
 
   /* ---------------- level metering ---------------- */
 
@@ -193,7 +210,18 @@ export function useVoice({ iceServers }) {
       }
       pendingIce.current.delete(socketId);
       clearRescue(socketId);
+      const watchdog = watchdogs.current.get(socketId);
+      if (watchdog) {
+        clearTimeout(watchdog);
+        watchdogs.current.delete(socketId);
+      }
       detachAnalyser(socketId);
+      setRoutes((prev) => {
+        if (!(socketId in prev)) return prev;
+        const next = { ...prev };
+        delete next[socketId];
+        return next;
+      });
       setPeerStates((prev) => {
         if (!(socketId in prev)) return prev;
         const next = { ...prev };
@@ -202,6 +230,74 @@ export function useVoice({ iceServers }) {
       });
     },
     [clearRescue, detachAnalyser],
+  );
+
+  /** How the audio actually travels, once a pair is chosen. 'relay' means via TURN. */
+  const reportRoute = useCallback(async (socketId, pc) => {
+    try {
+      const stats = await pc.getStats();
+      let pair = null;
+      const candidates = new Map();
+      stats.forEach((r) => {
+        if (r.type === 'local-candidate' || r.type === 'remote-candidate') candidates.set(r.id, r);
+        if (r.type === 'candidate-pair' && (r.selected || r.state === 'succeeded')) {
+          if (!pair || r.selected) pair = r;
+        }
+      });
+      const local = pair && candidates.get(pair.localCandidateId);
+      const remote = pair && candidates.get(pair.remoteCandidateId);
+      const kind =
+        local?.candidateType === 'relay' || remote?.candidateType === 'relay'
+          ? 'relay'
+          : local?.candidateType || null;
+      if (kind) setRoutes((prev) => (prev[socketId] === kind ? prev : { ...prev, [socketId]: kind }));
+    } catch {
+      /* diagnostics only */
+    }
+  }, []);
+
+  const clearWatchdog = useCallback((socketId) => {
+    const t = watchdogs.current.get(socketId);
+    if (t) {
+      clearTimeout(t);
+      watchdogs.current.delete(socketId);
+    }
+  }, []);
+
+  /**
+   * A pair that never reaches 'connected' is usually two NATs with no path between
+   * them - the normal case for two phones on mobile data. Retry with an ICE restart
+   * a couple of times, then say plainly what is wrong instead of spinning forever.
+   */
+  const armWatchdog = useCallback(
+    (socketId, entry) => {
+      clearWatchdog(socketId);
+      watchdogs.current.set(
+        socketId,
+        setTimeout(() => {
+          watchdogs.current.delete(socketId);
+          const { pc } = entry;
+          if (!peers.current.has(socketId) || pc.connectionState === 'connected') return;
+
+          entry.attempts = (entry.attempts || 0) + 1;
+          if (entry.attempts <= CONNECT_RETRIES) {
+            try {
+              pc.restartIce?.();
+            } catch {
+              /* nothing more to try here */
+            }
+            armWatchdog(socketId, entry);
+            return;
+          }
+          setReachability(
+            turnRef.current
+              ? 'Could not reach someone on the call. Their network may be blocking voice.'
+              : 'Could not connect to everyone. On mobile data this needs a TURN relay server — bidding and chat are unaffected.',
+          );
+        }, CONNECT_TIMEOUT_MS),
+      );
+    },
+    [clearWatchdog],
   );
 
   const createPeer = useCallback(
@@ -270,13 +366,20 @@ export function useVoice({ iceServers }) {
 
       pc.onconnectionstatechange = () => {
         setPeerStates((prev) => ({ ...prev, [socketId]: pc.connectionState }));
+        if (pc.connectionState === 'connected') {
+          entry.attempts = 0;
+          clearWatchdog(socketId);
+          setReachability(null);
+          reportRoute(socketId, pc);
+        }
         // 'failed' is handled by the ICE restart above; only a truly closed peer goes away.
         if (pc.connectionState === 'closed') closePeer(socketId);
       };
 
+      armWatchdog(socketId, entry);
       return entry;
     },
-    [attachAnalyser, clearRescue, closePeer, playEl],
+    [armWatchdog, attachAnalyser, clearRescue, clearWatchdog, closePeer, playEl, reportRoute],
   );
 
   const flushIce = useCallback(async (socketId, pc) => {
@@ -466,6 +569,8 @@ export function useVoice({ iceServers }) {
     setNeedsUnlock(false);
     setError(null);
     setSelfId(null);
+    setRoutes({});
+    setReachability(null);
   }, [detachAnalyser, teardownMesh]);
 
   /**
@@ -501,6 +606,47 @@ export function useVoice({ iceServers }) {
     return () => socket.off('connect', onConnect);
   }, [handshake, teardownMesh]);
 
+  /**
+   * A phone moving between wifi and mobile data gets a whole new local address, so
+   * every gathered candidate is dead. The sockets reconnect on their own; the media
+   * needs an ICE restart or the call stays up but silent.
+   */
+  useEffect(() => {
+    if (!joined) return undefined;
+
+    const restartAll = () => {
+      for (const [socketId, entry] of peers.current) {
+        if (entry.pc.connectionState === 'connected') continue;
+        try {
+          entry.pc.restartIce?.();
+        } catch {
+          /* nothing else to try */
+        }
+        entry.attempts = 0;
+        armWatchdog(socketId, entry);
+      }
+    };
+
+    // Mobile browsers suspend audio when the tab is hidden or the phone locks.
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return;
+      audioCtx.current?.resume().catch(() => {});
+      for (const el of audioEls.current.values()) el.play?.().catch(() => setNeedsUnlock(true));
+      restartAll();
+    };
+
+    window.addEventListener('online', restartAll);
+    document.addEventListener('visibilitychange', onVisible);
+    const link = navigator.connection;
+    link?.addEventListener?.('change', restartAll);
+
+    return () => {
+      window.removeEventListener('online', restartAll);
+      document.removeEventListener('visibilitychange', onVisible);
+      link?.removeEventListener?.('change', restartAll);
+    };
+  }, [joined, armWatchdog]);
+
   const toggleMute = useCallback(() => {
     const next = !muted;
     localStream.current?.getAudioTracks().forEach((t) => {
@@ -533,6 +679,9 @@ export function useVoice({ iceServers }) {
     needsUnlock,
     channel,
     selfId,
+    routes,
+    reachability,
+    turnAvailable,
     join,
     leave,
     toggleMute,
