@@ -171,6 +171,9 @@ socket, which is plain HTTPS. Only the peer-to-peer audio is affected.
   deadlock each other; perfect negotiation settles who backs down.
 - **Autoplay.** If the browser blocks remote audio, the dock offers an **Enable sound**
   button instead of silently playing nothing.
+- **Bandwidth.** Opus is capped at 24 kbps, 16 kbps when relayed, with DTX on, so a free
+  TURN allowance stretches a long way. Speech at these rates is indistinguishable over a
+  phone speaker.
 - **Switching networks.** Moving between wifi and mobile data invalidates every gathered
   candidate. The app watches `online` and connection-change events and restarts ICE, so
   the call recovers instead of staying up but silent.
@@ -182,6 +185,30 @@ socket, which is plain HTTPS. Only the peer-to-peer audio is affected.
 ---
 
 ## Running it for real
+
+### Running it entirely on free tiers
+
+Every piece of this has a free option, and the app is built to degrade rather than
+break when one is missing:
+
+| Piece | Free option | Without it |
+|---|---|---|
+| Hosting | Render free web service | – |
+| Database | MongoDB Atlas free tier (M0) | Rooms live in memory and end when the instance sleeps |
+| Player pool | Built-in roster of 115 real cricketers | *(the roster **is** the free option — a Gemini key just varies the list)* |
+| AI verdict | Built-in balance model | *(same — the local model always works)* |
+| Voice relay | Self-hosted `coturn`, or a provider's free allowance | Voice works on wifi, not on mobile data |
+
+Only voice has a hard cost, because a relay carries real bandwidth. To keep it inside a
+free allowance the app caps Opus at **24 kbps**, drops to **16 kbps** on relayed
+connections, and turns on DTX so silence costs almost nothing. Measured on the wire that
+is about **11 MB per person-hour** for a constantly-talking stream, and much less in a
+real conversation where people take turns.
+
+The cheapest genuinely-free relay is `coturn` on an always-free VM (Oracle Cloud's
+Always Free tier gives you one with a large bandwidth allowance). Hosted providers -
+Cloudflare, Metered, Xirsys - also publish free allowances; check their current terms
+rather than trusting a number written here.
 
 ### Render (recommended — one click, everything on one origin)
 

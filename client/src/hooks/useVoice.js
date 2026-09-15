@@ -27,6 +27,60 @@ const OFFER_RESCUE_MS = 4000;
 const CONNECT_TIMEOUT_MS = 12_000;
 const CONNECT_RETRIES = 2;
 
+/**
+ * Speech bitrates. Opus is very good at these rates for voice - the difference is
+ * inaudible over a phone speaker - and every bit saved is TURN relay bandwidth that
+ * a free allowance does not have to pay for.
+ */
+const BITRATE_DIRECT = 24_000;
+const BITRATE_RELAYED = 16_000;
+
+/**
+ * Turn on Opus discontinuous transmission. Without it a mic sends full-rate frames
+ * even while nobody is speaking, which is most of any conversation. Purely additive:
+ * if the m-line does not look how we expect, the SDP is handed back untouched.
+ */
+function enableDtx(sdp) {
+  try {
+    if (!sdp || /usedtx=1/.test(sdp)) return sdp;
+    const opus = sdp.match(/a=rtpmap:(\d+) opus\/48000/i);
+    if (!opus) return sdp;
+
+    const pt = opus[1];
+    const fmtp = new RegExp('a=fmtp:' + pt + ' ([^\r\n]*)');
+    if (fmtp.test(sdp)) {
+      return sdp.replace(fmtp, (_match, params) => `a=fmtp:${pt} ${params};usedtx=1`);
+    }
+    // No Opus fmtp line yet - add one. SDP lines are CRLF terminated.
+    const rtpmap = new RegExp('(a=rtpmap:' + pt + ' opus\/48000[^\r\n]*)');
+    return sdp.replace(rtpmap, '$1\r\na=fmtp:' + pt + ' usedtx=1');
+  } catch {
+    return sdp;
+  }
+}
+
+/** Cap what a peer connection will send. Cheap to call again when a route changes. */
+async function capBitrate(pc, bps) {
+  try {
+    for (const sender of pc.getSenders()) {
+      if (sender.track?.kind !== 'audio') continue;
+      const params = sender.getParameters();
+      if (!params.encodings || !params.encodings.length) params.encodings = [{}];
+      params.encodings[0].maxBitrate = bps;
+      await sender.setParameters(params);
+    }
+  } catch {
+    /* an old browser without setParameters just runs uncapped */
+  }
+}
+
+/** Build a local description with our Opus tweaks applied. */
+async function describeLocal(pc) {
+  const desc = pc.signalingState === 'have-remote-offer' ? await pc.createAnswer() : await pc.createOffer();
+  desc.sdp = enableDtx(desc.sdp);
+  await pc.setLocalDescription(desc);
+}
+
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export function useVoice({ iceServers, turnAvailable = false }) {
@@ -250,7 +304,11 @@ export function useVoice({ iceServers, turnAvailable = false }) {
         local?.candidateType === 'relay' || remote?.candidateType === 'relay'
           ? 'relay'
           : local?.candidateType || null;
-      if (kind) setRoutes((prev) => (prev[socketId] === kind ? prev : { ...prev, [socketId]: kind }));
+      if (kind) {
+        setRoutes((prev) => (prev[socketId] === kind ? prev : { ...prev, [socketId]: kind }));
+        // A relayed stream costs the TURN server bandwidth in both directions.
+        capBitrate(pc, kind === 'relay' ? BITRATE_RELAYED : BITRATE_DIRECT);
+      }
     } catch {
       /* diagnostics only */
     }
@@ -322,7 +380,8 @@ export function useVoice({ iceServers, turnAvailable = false }) {
         if (pc.signalingState !== 'stable') return;
         try {
           entry.makingOffer = true;
-          await pc.setLocalDescription();
+          await describeLocal(pc);
+          await capBitrate(pc, BITRATE_DIRECT);
           socket.emit('voice:signal', { to: socketId, data: { sdp: pc.localDescription } });
         } catch (err) {
           console.warn('[voice] negotiation failed', err);
@@ -419,7 +478,8 @@ export function useVoice({ iceServers, turnAvailable = false }) {
           await flushIce(from, pc);
 
           if (data.sdp.type === 'offer') {
-            await pc.setLocalDescription();
+            await describeLocal(pc);
+            await capBitrate(pc, BITRATE_DIRECT);
             socket.emit('voice:signal', { to: from, data: { sdp: pc.localDescription } });
           }
         } else if (data.candidate) {
