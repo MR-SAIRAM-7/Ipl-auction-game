@@ -14,7 +14,7 @@ auction and WebRTC for voice.
 
 | | |
 |---|---|
-| **AI player pool** | Gemini generates a fresh set of fictional cricketers every auction — role, country, batting/bowling style, T20 stats, a scouting blurb and a base price — then the pool is shuffled so the order is different every time. |
+| **Real players** | The pool is made of real cricketers — Kohli, Bumrah, Russell, Rashid Khan, de Villiers and 110 others — with their actual role, country, batting hand and bowling style. Gemini picks a fresh list each auction when a key is set; without one, a built-in roster of 115 is used. |
 | **Live auction** | Server-authoritative clock, a proper 1-3 minute spell on the block for every player, IPL-style bid slabs, pass-to-speed-up, an unsold round at half base price, and SOLD/UNSOLD stamps. |
 | **Franchises, not just players** | A franchise can seat up to 8 people - an owner, a coach, whoever else you drag in. They share one purse, any of them can raise the paddle, and every bid is attributed to whoever made it. Pick a franchise on the join screen or start your own. |
 | **50 lakh rules** | Every team starts with a ₹50,00,000 purse and **no single bid can exceed ₹50 lakh**. Teams must hold back enough to fill a minimum squad, so nobody can blow everything on one signing. |
@@ -23,8 +23,15 @@ auction and WebRTC for voice.
 | **Mobile first** | A quiet, minimal light interface — one-tap bidding, a fixed bid bar, big readable numbers, safe-area support. Works great on desktop too. |
 
 Everything degrades gracefully: **no Gemini key and no MongoDB are required to play.**
-Without a key, players come from a built-in generator and the verdict uses a local balance
+Without a key, players come from the built-in roster and the verdict uses a local balance
 model. Without Mongo, rooms live in memory for the session.
+
+> **On the player data.** Names, roles, countries, batting hands and bowling styles are
+> real. The **statistics are indicative** — rounded, career-shaped T20 numbers meant to make
+> a player feel right at the auction table, not official records. Ratings and base prices are
+> editorial: a scaled-down economy that fits a ₹50 lakh purse, not real auction prices.
+> The roster lives in [`server/src/data/realPlayers.js`](server/src/data/realPlayers.js) —
+> edit it to add players, drop the retired legends, or tune anyone's rating.
 
 ---
 
@@ -219,7 +226,8 @@ ipl-auction/
 │     ├─ services/
 │     │  ├─ auctionEngine.js      Authoritative clock, bid rules, lots, purses
 │     │  ├─ gemini.js             Player pool, final verdict, commentary (+ fallbacks)
-│     │  ├─ playerPool.js         Offline player generator
+│     │  ├─ playerPool.js         Builds a pool from the real-player roster
+│     ├─ data/realPlayers.js     115 real cricketers, the offline pool
 │     │  └─ roomStore.js          In-memory rooms mirrored to MongoDB
 │     └─ utils/money.js           Rupee formatting, bid slabs, the 50 lakh cap
 └─ client/
@@ -245,6 +253,7 @@ money or extend a timer. The UI mirrors the reserve rule purely to grey out butt
 
 ## Notes
 
-- Every generated player is **fictional**. The prompt explicitly forbids real cricketers' names.
+- Players are **real cricketers**; their stats are approximations, not official records. See
+  the note near the top and the roster file if you want to change who turns up.
 - Refreshing mid-auction is safe — your browser keeps a stable player id, so you rejoin your own team and purse.
 - If everyone closes the tab, the auction pauses and resumes when someone comes back.

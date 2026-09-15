@@ -109,7 +109,7 @@ export default function PlayerLot() {
             <span className="role-badge" data-role={p.role}>{p.role}</span>
             <span className="pill">{p.country}</span>
             {p.overseas ? <span className="pill">Overseas</span> : null}
-            <span className="pill">{p.age} yrs</span>
+            {Number.isFinite(p.age) ? <span className="pill">{p.age} yrs</span> : null}
           </div>
         </div>
         <div className="rating-ring" style={{ '--pct': p.rating }}>

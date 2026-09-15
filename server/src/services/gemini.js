@@ -119,12 +119,12 @@ const POOL_SCHEMA = {
 };
 
 const THEMES = [
-  'a fresh crop of uncapped domestic talent mixed with proven overseas T20 franchise stars',
-  'a mystery-box auction packed with wildcard mystery spinners and 360-degree power hitters',
-  'a season where death-over specialists and finishers are the hottest commodity',
-  'a youth-heavy pool with a handful of grizzled veterans on their last big contract',
-  'a pool built around Impact Player rules, where specialists beat generalists',
-  'a global draft loaded with Caribbean power hitters and Afghan wrist spinners',
+  'uncapped and emerging Indian talent alongside proven overseas franchise stars',
+  'mystery spinners and 360-degree power hitters',
+  'death-over specialists and finishers being the hottest commodity',
+  'a youth-heavy list with a handful of veterans on one last big contract',
+  'Impact Player rules, where specialists beat generalists',
+  'Caribbean power hitters and Afghan wrist spinners',
 ];
 
 function normalisePlayers(raw) {
@@ -184,7 +184,8 @@ export function shuffle(list) {
 }
 
 /**
- * Ask Gemini for a brand new, randomised pool of fictional-but-believable players.
+ * Ask Gemini for a pool of real cricketers. The local roster is the fallback, so a
+ * missing key or a failed call still gives you real names.
  * @returns {Promise<{players: any[], source: 'gemini'|'local', theme: string}>}
  */
 export async function generatePlayerPool({ count = 40 } = {}) {
@@ -196,20 +197,23 @@ export async function generatePlayerPool({ count = 40 } = {}) {
   }
 
   const prompt = [
-    'You are the scouting engine for a fantasy IPL-style player auction game.',
+    'You are the scouting engine for an IPL-style player auction game played between friends.',
     '',
-    `Generate EXACTLY ${count} completely fictional cricketers for an auction pool.`,
-    `Randomisation seed: ${seed}. Theme for this season: ${theme}.`,
+    `Pick EXACTLY ${count} REAL cricketers for the auction pool.`,
+    `Randomisation seed: ${seed}. Slant this season's list towards ${theme}.`,
     '',
     'Hard rules:',
-    '- Names must be INVENTED. Never use the name of any real cricketer, living or dead.',
-    '- Names should feel authentic for their country. Roughly 65-70% India, the rest from Australia, England, South Africa, New Zealand, West Indies, Sri Lanka or Afghanistan.',
-    '- Role mix: about 30% Batter, 30% Bowler, 25% All-rounder, 15% Wicket-keeper.',
-    '- "rating" is an overall T20 ability score from 40 to 99. Spread it: about 5 superstars (90+), 12 strong (78-89), the rest mid-tier and raw prospects.',
-    '- "basePriceLakh" is the base price in LAKHS of rupees and MUST be between 0.2 and 5.0, with one decimal place. It correlates with rating: a 95-rated superstar sits near 4.5-5.0, a 50-rated rookie near 0.2-0.5.',
-    '- Stats must be internally consistent. Pure Batters and Wicket-keepers get wickets 0, economy 0 and bowlingAverage 0. Bowlers get a low battingAverage (8-20) and strikeRate (100-130). Strike rates sit between 110 and 185. Economy between 5.5 and 10.5.',
-    '- "tags" are 1-3 short scouting labels such as "Death-overs specialist", "Powerplay enforcer", "Uncapped gem", "Mystery spinner".',
-    '- "blurb" is one punchy scouting sentence, max 18 words.',
+    '- Every player must be a REAL cricketer who has played T20 franchise or international cricket. Use their actual name, country, batting hand and bowling style.',
+    '- Do NOT invent players, and do not return anyone whose details you are unsure of.',
+    '- No duplicates. Vary the selection between seasons using the seed above.',
+    '- Roughly 60-70% India, the rest from Australia, England, South Africa, New Zealand, West Indies, Sri Lanka, Afghanistan or Bangladesh.',
+    '- Role mix: about 32% Batter, 32% Bowler, 24% All-rounder, 12% Wicket-keeper, and give each player the role they actually play.',
+    '- "rating" is your editorial T20 value score from 40 to 99 - how badly a franchise would want them. Spread it: a handful of superstars (90+), some strong (78-89), the rest solid squad players.',
+    '- "basePriceLakh" is the base price in LAKHS of rupees and MUST be between 0.2 and 5.0, with one decimal place. It tracks rating: a 95-rated superstar sits near 4.5-5.0, a squad filler near 0.2-0.5. This is the game\'s own scaled-down economy, not a real auction price.',
+    '- Stats should be that player\'s realistic career T20 figures, rounded. Approximate is fine - they are flavour, not a record book. Pure Batters and Wicket-keepers get wickets 0, economy 0 and bowlingAverage 0. Bowlers get a low battingAverage (5-20).',
+    '- "age" is their approximate age in years today.',
+    '- "tags" are 1-3 short scouting labels that genuinely fit that player, such as "Death-overs specialist", "Powerplay enforcer", "Mystery spinner", "Finisher".',
+    '- "blurb" is one punchy scouting sentence about that specific player, max 18 words.',
     '',
     'Return ONLY the JSON array.',
   ].join('\n');
