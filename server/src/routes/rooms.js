@@ -12,46 +12,9 @@ import { publicRoom } from '../services/auctionEngine.js';
 import { geminiEnabled } from '../services/gemini.js';
 import { DEFAULT_PURSE, MAX_BID } from '../utils/money.js';
 import { dbReady } from '../config/db.js';
+import { iceServers } from '../config/ice.js';
 import { MAX_ROOMS, createRoomLimiter } from '../utils/limits.js';
 import { roomCount } from '../services/roomStore.js';
-
-const STUN = [
-  'stun:stun.l.google.com:19302',
-  'stun:stun1.l.google.com:19302',
-  'stun:global.stun.twilio.com:3478',
-];
-
-const turnUrls = () =>
-  (process.env.TURN_URLS || process.env.TURN_URL || '')
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean);
-
-/** A TURN server is only usable if it has credentials to go with it. */
-export const turnConfigured = () =>
-  turnUrls().length > 0 && Boolean(process.env.TURN_USERNAME) && Boolean(process.env.TURN_CREDENTIAL);
-
-/**
- * STUN only tells a peer its own public address. That is enough when at least one
- * side sits behind a permissive NAT, which is typical on home wifi.
- *
- * Mobile carriers use CGNAT, which is symmetric: the port a peer sees is not the
- * port anyone else can reach. Two phones on mobile data therefore have no direct
- * path at all, and only a TURN server - which relays the audio - will connect them.
- * Set TURN_URLS (comma separated, ideally a udp, a tcp and a turns:443 entry) plus
- * TURN_USERNAME and TURN_CREDENTIAL if people will play off wifi.
- */
-export const iceServers = () => {
-  const servers = [{ urls: STUN }];
-  if (turnConfigured()) {
-    servers.push({
-      urls: turnUrls(),
-      username: process.env.TURN_USERNAME,
-      credential: process.env.TURN_CREDENTIAL,
-    });
-  }
-  return servers;
-};
 
 const router = Router();
 
@@ -59,13 +22,16 @@ router.get('/health', (_req, res) => {
   res.json({ ok: true, db: dbReady(), gemini: geminiEnabled() });
 });
 
-router.get('/config', (_req, res) => {
+router.get('/config', async (_req, res) => {
+  // Cloudflare credentials are minted on demand, so this can await; it never throws.
+  const servers = await iceServers();
   res.json({
     gemini: geminiEnabled(),
     db: dbReady(),
-    iceServers: iceServers(),
-    // Lets the client explain a failed call instead of just shrugging at it.
-    turn: turnConfigured(),
+    iceServers: servers,
+    // Whether a relay is actually usable, not merely configured, so the client can
+    // explain a failed call instead of just shrugging at it.
+    turn: servers.length > 1,
     maxBid: MAX_BID,
     defaultPurse: DEFAULT_PURSE,
     defaults: defaultSettings(),

@@ -95,7 +95,8 @@ All of `server/.env` is optional. The app boots and plays without any of it.
 | `GEMINI_API_KEY` | – | Enables AI player generation, the final verdict and auctioneer commentary. Get one free at <https://aistudio.google.com/apikey>. |
 | `GEMINI_MODEL` | `gemini-2.5-flash` | Any Gemini model id. |
 | `GEMINI_COMMENTARY` | `true` | Set to `false` to skip the one-line auctioneer commentary after each sale. |
-| `TURN_URLS` / `TURN_USERNAME` / `TURN_CREDENTIAL` | – | TURN relay, comma-separated URLs. **Required for voice on mobile data.** `TURN_URL` is still accepted for a single entry. |
+| `TURN_KEY_ID` / `TURN_KEY_API_TOKEN` | – | Cloudflare Realtime TURN. **Required for voice on mobile data**, and the largest free allowance. Credentials are minted per session by the server. |
+| `TURN_URLS` / `TURN_USERNAME` / `TURN_CREDENTIAL` | – | Any static relay instead (coturn, Metered, Xirsys), comma-separated URLs. All three needed. `TURN_URL` is still accepted for a single entry. |
 
 ---
 
@@ -134,7 +135,18 @@ home wifi. **Mobile carriers use CGNAT, which is symmetric**: the port one peer 
 not the port anyone else can reach. Two phones on mobile data therefore have no direct
 path at all, and no amount of retrying will find one.
 
-The fix is a **TURN server**, which relays the audio. Set:
+The fix is a **TURN server**, which relays the audio. Either point the app at
+Cloudflare Realtime, which has by far the largest free allowance:
+
+```bash
+TURN_KEY_ID=...
+TURN_KEY_API_TOKEN=...
+```
+
+Cloudflare only issues short-lived credentials, so the server mints them and hands them
+to the client through `/api/config`, caching one until shortly before it expires.
+
+Or give it any static relay — self-hosted `coturn`, Metered, Xirsys:
 
 ```bash
 TURN_URLS=turn:host:3478?transport=udp,turn:host:3478?transport=tcp,turns:host:443?transport=tcp
@@ -147,9 +159,12 @@ what gets through hotel, office and campus firewalls that block everything else.
 
 Where to get one:
 
-- **Metered / Twilio / Xirsys** — hosted TURN, metered per GB, with small free tiers.
-  Voice is a few MB per person-hour, so a friends' game costs very little.
-- **Cloudflare Calls** — TURN with a free allowance.
+- **Cloudflare Realtime** — the one to pick. 1,000 GB/month free, then $0.05/GB, and
+  `turn.cloudflare.com` serves udp 3478, tcp 3478/80 and TLS on 443, which is exactly
+  the spread you want. Set `TURN_KEY_ID` and `TURN_KEY_API_TOKEN`.
+- **Metered Open Relay** — 20 GB/month free with static credentials, so it drops
+  straight into `TURN_URLS` with no key minting.
+- **Twilio / Xirsys** — hosted TURN, metered per GB, smaller free tiers.
 - **Self-host `coturn`** on any VPS — one package, one config file, cheapest at volume.
 
 The server prints which mode it is in at boot (`Voice: STUN only` vs `STUN + TURN
@@ -197,7 +212,7 @@ break when one is missing:
 | Database | MongoDB Atlas free tier (M0) | Rooms live in memory and end when the instance sleeps |
 | Player pool | Built-in roster of 115 real cricketers | *(the roster **is** the free option — a Gemini key just varies the list)* |
 | AI verdict | Built-in balance model | *(same — the local model always works)* |
-| Voice relay | Self-hosted `coturn`, or a provider's free allowance | Voice works on wifi, not on mobile data |
+| Voice relay | Cloudflare Realtime TURN (1,000 GB/mo), or self-hosted `coturn` | Voice works on wifi, not on mobile data |
 
 Only voice has a hard cost, because a relay carries real bandwidth. To keep it inside a
 free allowance the app caps Opus at **24 kbps**, drops to **16 kbps** on relayed
@@ -205,9 +220,10 @@ connections, and turns on DTX so silence costs almost nothing. Measured on the w
 is about **11 MB per person-hour** for a constantly-talking stream, and much less in a
 real conversation where people take turns.
 
-The cheapest genuinely-free relay is `coturn` on an always-free VM (Oracle Cloud's
-Always Free tier gives you one with a large bandwidth allowance). Hosted providers -
-Cloudflare, Metered, Xirsys - also publish free allowances; check their current terms
+Cloudflare Realtime's 1,000 GB/month free tier is the easiest way to stay at zero: at
+the rates above that is more auction hours than you will ever play. `coturn` on an
+always-free VM (Oracle Cloud's Always Free tier) is the alternative if you would rather
+own the relay than depend on an allowance. Free tiers move, so check current terms
 rather than trusting a number written here.
 
 ### Render (recommended — one click, everything on one origin)
