@@ -95,7 +95,7 @@ All of `server/.env` is optional. The app boots and plays without any of it.
 | `GEMINI_API_KEY` | – | Enables AI player generation, the final verdict and auctioneer commentary. Get one free at <https://aistudio.google.com/apikey>. |
 | `GEMINI_MODEL` | `gemini-2.5-flash` | Any Gemini model id. |
 | `GEMINI_COMMENTARY` | `true` | Set to `false` to skip the one-line auctioneer commentary after each sale. |
-| `METERED_APP_NAME` / `METERED_API_KEY` | – | Metered Open Relay TURN. **Required for voice on mobile data.** Free monthly allowance and no credit card, so start here. Credentials are fetched by the server. |
+| `METERED_APP_NAME` / `METERED_API_KEY` | – | Metered Open Relay TURN. **Required for voice on mobile data.** Free monthly allowance and no credit card, so start here. The app name is the subdomain (`my-app` for `my-app.metered.live`; the full domain works too). Credentials are fetched by the server. |
 | `TURN_KEY_ID` / `TURN_KEY_API_TOKEN` | – | Cloudflare Realtime TURN instead — a far larger free allowance, but signup asks for a card. |
 | `TURN_URLS` / `TURN_USERNAME` / `TURN_CREDENTIAL` | – | Any static relay instead (coturn, Metered, Xirsys), comma-separated URLs. All three needed. `TURN_URL` is still accepted for a single entry. |
 

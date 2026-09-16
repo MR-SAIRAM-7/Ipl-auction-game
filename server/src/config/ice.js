@@ -68,9 +68,18 @@ let cached = null; // { servers, expiresAt }
 
 const isFresh = () => cached && Date.now() < cached.expiresAt - REFRESH_MARGIN_MS;
 
+/**
+ * The dashboard shows the app as a full domain, so accept either that or the bare
+ * subdomain rather than turning a reasonable copy-paste into a DNS error.
+ */
+const meteredHost = () => {
+  const raw = (process.env.METERED_APP_NAME || '').trim().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+  return raw.endsWith('.metered.live') ? raw : `${raw}.metered.live`;
+};
+
 /** Metered returns a ready-made iceServers array. We keep only its relay entries. */
 async function meteredTurn() {
-  const url = `https://${process.env.METERED_APP_NAME}.metered.live/api/v1/turn/credentials?apiKey=${encodeURIComponent(process.env.METERED_API_KEY)}`;
+  const url = `https://${meteredHost()}/api/v1/turn/credentials?apiKey=${encodeURIComponent(process.env.METERED_API_KEY)}`;
   const res = await fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const body = await res.json();
