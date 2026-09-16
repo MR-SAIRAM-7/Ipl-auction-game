@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "node --watch src/index.js",
     "start": "node src/index.js",
-    "test": "node --test --test-concurrency=1 \"test/rooms.test.js\" \"test/auction.test.js\" \"test/resilience.test.js\"",
+    "test": "node --test --test-concurrency=1 \"test/rooms.test.js\" \"test/auction.test.js\" \"test/resilience.test.js\" \"test/xi.test.js\"",
     "test:game": "node --test --test-concurrency=1 \"test/full-game.test.js\"",
     "test:all": "node --test --test-concurrency=1 \"test/**/*.test.js\""
   },

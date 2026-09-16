@@ -155,6 +155,47 @@ export default function Lobby() {
       </section>
 
       <section className="card">
+        <div className="section-title">Format {isHost ? '' : '· host controls this'}</div>
+        <div className="format-picker">
+          {(serverConfig?.formats || []).map((f) => {
+            const active = (s.format || 'ipl') === f.id;
+            return (
+              <button
+                type="button"
+                key={f.id}
+                className={`format-card ${active ? 'active' : ''}`}
+                disabled={!isHost}
+                onClick={() =>
+                  updateSettings({
+                    ...s,
+                    format: f.id,
+                    // The format decides the squad shape, so follow it unless the host
+                    // has already moved these by hand.
+                    squadSize: f.defaultSquadSize,
+                    minSquad: f.defaultMinSquad,
+                  })
+                }
+              >
+                <span className="format-name">{f.name}</span>
+                <span className="format-long">{f.longName}</span>
+                <span className="format-tag">{f.tagline}</span>
+                <span className="format-rules">
+                  {f.xiSize} in the XI
+                  {f.maxOverseasInXI != null ? ` · max ${f.maxOverseasInXI} overseas` : ' · no overseas cap'}
+                  {f.impactPlayer ? ' · impact player' : ''}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+        <p className="muted" style={{ fontSize: 12.5, marginTop: 10 }}>
+          The format changes which players are worth money, what a legal XI looks like, and how the
+          squads are judged at the end. A death-overs specialist is priceless in the IPL and close to
+          useless in a Test.
+        </p>
+      </section>
+
+      <section className="card">
         <div className="section-title">Auction rules {isHost ? '' : '· host controls these'}</div>
         <div className="settings-grid">
           <SettingRow label="Purse per team" hint={`Currently ${formatINR(s.purse)}`}>
@@ -209,7 +250,7 @@ export default function Lobby() {
                 updateSettings({ ...s, squadSize, minSquad: Math.min(s.minSquad, squadSize) });
               }}
             >
-              {[11, 13, 15, 18].map((n) => (
+              {[11, 13, 15, 16, 18].map((n) => (
                 <option key={n} value={n}>{n} players</option>
               ))}
             </select>

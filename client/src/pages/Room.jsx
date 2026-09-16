@@ -5,6 +5,7 @@ import TopBar from '../components/TopBar.jsx';
 import Lobby from '../components/Lobby.jsx';
 import AuctionFloor from '../components/AuctionFloor.jsx';
 import Results from '../components/Results.jsx';
+import SelectXI from '../components/SelectXI.jsx';
 import SquadsDrawer from '../components/SquadsDrawer.jsx';
 import ChatDrawer from '../components/ChatDrawer.jsx';
 import { VoiceProvider } from '../context/VoiceProvider.jsx';
@@ -129,6 +130,7 @@ export default function Room() {
       {room.status === 'generating' || room.status === 'auction' ? (
         <AuctionFloor onSelectTeam={openSquads} />
       ) : null}
+      {room.status === 'selecting' ? <SelectXI /> : null}
       {room.status === 'finished' ? <Results /> : null}
 
       <SquadsDrawer open={squadsOpen} onClose={() => setSquadsOpen(false)} focusTeamId={focusTeam} />

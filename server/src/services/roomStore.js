@@ -5,6 +5,7 @@
 import { RoomModel } from '../models/Room.js';
 import { dbReady } from '../config/db.js';
 import { DEFAULT_PURSE, MAX_BID } from '../utils/money.js';
+import { DEFAULT_FORMAT, getFormat } from '../data/formats.js';
 
 /**
  * Every player gets a proper spell on the block: one to three minutes.
@@ -34,14 +35,21 @@ export const TEAM_COLORS = [
 ];
 
 export function defaultSettings(overrides = {}) {
+  // The format decides the squad shape, so resolve it before the other defaults and
+  // let it supply them - an explicit override still wins over the format's suggestion.
+  const formatId = getFormat(overrides.format).id;
+  const format = getFormat(formatId);
   return {
+    format: formatId,
     purse: DEFAULT_PURSE,
-    squadSize: 15,
-    minSquad: 11,
+    squadSize: format.defaultSquadSize,
+    minSquad: format.defaultMinSquad,
     bidTimerSec: DEFAULT_LOT_SEC,
     poolSize: 40,
     maxBid: MAX_BID,
     ...overrides,
+    // Never let a stale or tampered value through, whatever the overrides said.
+    format: formatId,
   };
 }
 
@@ -109,6 +117,7 @@ export async function loadRoom(code) {
     poolSource: doc.poolSource,
     teams: (doc.teams || []).map((t) => ({
       ...t,
+      xi: t.xi || null,
       connected: false,
       // Nobody is at any table until they reconnect.
       members: (t.members?.length ? t.members : [{ playerId: t.ownerId, name: t.ownerName, isOwner: true }]).map(
@@ -143,8 +152,8 @@ export function persistRoom(room) {
     theme: room.theme,
     poolSource: room.poolSource,
     teams: room.teams.map(
-      ({ id, name, shortName, color, ownerId, ownerName, members, purse, squad, connected, isHost }) => ({
-        id, name, shortName, color, ownerId, ownerName, members, purse, squad, connected, isHost,
+      ({ id, name, shortName, color, ownerId, ownerName, members, purse, squad, connected, isHost, xi }) => ({
+        id, name, shortName, color, ownerId, ownerName, members, purse, squad, connected, isHost, xi,
       }),
     ),
     pool: room.pool,

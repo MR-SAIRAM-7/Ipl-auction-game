@@ -13,6 +13,7 @@ import { geminiEnabled } from '../services/gemini.js';
 import { DEFAULT_PURSE, MAX_BID } from '../utils/money.js';
 import { dbReady } from '../config/db.js';
 import { iceServers } from '../config/ice.js';
+import { DEFAULT_FORMAT, formatSummaries } from '../data/formats.js';
 import { MAX_ROOMS, createRoomLimiter } from '../utils/limits.js';
 import { roomCount } from '../services/roomStore.js';
 
@@ -35,6 +36,9 @@ router.get('/config', async (_req, res) => {
     maxBid: MAX_BID,
     defaultPurse: DEFAULT_PURSE,
     defaults: defaultSettings(),
+    // The XI screen and the lobby picker both need the format rules up front.
+    formats: formatSummaries(),
+    defaultFormat: DEFAULT_FORMAT,
   });
 });
 

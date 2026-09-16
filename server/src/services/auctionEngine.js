@@ -5,6 +5,8 @@
  */
 import { MAX_BID, bidIncrement, nextBidAmount } from '../utils/money.js';
 import { auctioneerLine, evaluateAuction, generatePlayerPool } from './gemini.js';
+import { autoPickXI, validateXI } from './playingXI.js';
+import { getFormat } from '../data/formats.js';
 import { MAX_LOT_SEC, MIN_LOT_SEC, DEFAULT_LOT_SEC, persistRoom } from './roomStore.js';
 
 const MIN_BASE = 20_000;
@@ -49,6 +51,9 @@ export const publicTeam = (t, hostId) => ({
   })),
   purse: t.purse,
   squad: t.squad,
+  // Whether this franchise has named a side, but never WHICH side - the selection is
+  // the one thing in the game worth hiding from a rival until the verdict.
+  xiSubmitted: Boolean(t.xi && !t.xi.auto),
   connected: t.connected,
   isHost: t.isHost,
 });
@@ -89,7 +94,15 @@ export function publicRoom(room, { includePool = true } = {}) {
     lot: publicLot(room),
     lotIndex: room.lotIndex,
     poolSize: room.pool.length,
-    pool: includePool ? room.pool : undefined,
+    /**
+     * The upcoming players are deliberately NOT sent. Knowing who is still to come
+     * removes the whole point of bidding under pressure, and stripping them from the
+     * payload is the only way to stop a curious player reading them out of devtools.
+     * What a real auction does announce is the set, so that is what goes instead.
+     */
+    sets: setProgress(room),
+    // When the XI selection window shuts, so every client runs the same countdown.
+    selectionEndsAt: room.selectionEndsAt ?? null,
     history: room.history.slice(-40),
     unsoldCount: room.unsoldQueue.length,
     secondRoundDone: room.secondRoundDone,
@@ -98,6 +111,22 @@ export function publicRoom(room, { includePool = true } = {}) {
     chat: room.chat.slice(-50),
     commentary: room.commentary.slice(-12),
   };
+}
+
+/**
+ * Where the auction has got to, set by set: how many lots each set holds and how many
+ * are already gone. Enough to plan a purse around, nothing that spoils a lot.
+ */
+function setProgress(room) {
+  const seen = new Map();
+  room.pool.forEach((p, i) => {
+    const key = p.setLabel || 'Players';
+    if (!seen.has(key)) seen.set(key, { label: key, total: 0, done: 0 });
+    const entry = seen.get(key);
+    entry.total += 1;
+    if (i <= room.lotIndex) entry.done += 1;
+  });
+  return [...seen.values()];
 }
 
 export function broadcastRoom(io, room, opts) {
@@ -180,7 +209,10 @@ export async function startAuction(io, room) {
   });
   broadcastRoom(io, room, { includePool: false });
 
-  const { players, source, theme } = await generatePlayerPool({ count: room.settings.poolSize });
+  const { players, source, theme } = await generatePlayerPool({
+    count: room.settings.poolSize,
+    format: room.settings.format,
+  });
   room.pool = players.map((p) => ({ ...p, round: 1 }));
   room.poolSource = source;
   room.theme = theme;
@@ -407,6 +439,7 @@ export function closeLot(io, room, reason) {
     teamName: sale.teamName,
     price: sale.price,
     unsold: sale.status === 'unsold',
+    formatId: room.settings?.format,
   })
     .then((text) => {
       if (!text) return;
@@ -419,11 +452,95 @@ export function closeLot(io, room, reason) {
   schedule(room.code, BREAK_MS, () => openNextLot(io, room));
 }
 
-export async function finishAuction(io, room, reason) {
+/** How long teams get to name a side before one is picked for them. */
+export const XI_SELECT_MS = 150_000;
+
+/**
+ * The auction is over, but the game is not: every side now names an XI, a captain and
+ * a keeper (plus an impact player in the IPL). Judging the team you actually picked is
+ * a different game from judging everything you happened to buy.
+ */
+export function finishAuction(io, room, reason) {
+  if (room.status === 'finished' || room.status === 'selecting') return;
+  clearRoomTimer(room.code);
+  room.lot = null;
+
+  // Nobody signed anybody, so there is no side to name. Skipping straight to the
+  // verdict also means a host who ends the auction immediately is not made to sit
+  // through a selection window with an empty squad.
+  if (!room.teams.some((t) => (t.squad || []).length > 0)) {
+    room.status = 'auction';
+    concludeAuction(io, room, reason);
+    return;
+  }
+
+  room.status = 'selecting';
+  room.selectionEndsAt = Date.now() + XI_SELECT_MS;
+  room.teams.forEach((t) => {
+    t.xi = null;
+  });
+  broadcastRoom(io, room, { includePool: false });
+  io.to(room.code).emit('auction:selecting', {
+    reason: reason || 'Auction complete.',
+    endsAt: room.selectionEndsAt,
+    seconds: Math.round(XI_SELECT_MS / 1000),
+  });
+  persistRoom(room);
+
+  // Anyone who never submits gets the best legal side their squad can field.
+  schedule(room.code, XI_SELECT_MS, () => concludeAuction(io, room));
+}
+
+/** Records one team's side. Returns the validation result so the caller can reply. */
+export function submitTeamXI(io, room, team, selection) {
+  if (room.status !== 'selecting') {
+    return { ok: false, errors: ['The selection window is closed.'] };
+  }
+  const formatId = getFormat(room.settings?.format).id;
+  const result = validateXI({
+    squad: team.squad || [],
+    xiIds: selection?.xiIds,
+    captainId: selection?.captainId,
+    keeperId: selection?.keeperId,
+    impactId: selection?.impactId,
+    formatId,
+  });
+  if (!result.ok) return result;
+
+  team.xi = {
+    xiIds: result.xi.map((p) => p.id),
+    captainId: selection.captainId,
+    keeperId: selection.keeperId,
+    impactId: selection.impactId ?? null,
+    auto: false,
+    submittedAt: new Date(),
+  };
+  room.lastActivity = Date.now();
+  broadcastRoom(io, room, { includePool: false });
+  persistRoom(room);
+
+  // Once everyone with a squad has named a side there is nothing left to wait for.
+  const waiting = room.teams.filter((t) => (t.squad || []).length > 0 && !t.xi);
+  if (!waiting.length) {
+    clearRoomTimer(room.code);
+    schedule(room.code, 600, () => concludeAuction(io, room));
+  }
+  return result;
+}
+
+async function concludeAuction(io, room, reason) {
   if (room.status === 'finished') return;
   clearRoomTimer(room.code);
+  const formatId = getFormat(room.settings?.format).id;
+
+  // Fill in for anyone who ran out of time, so every squad is judged on a legal side.
+  room.teams.forEach((t) => {
+    if ((t.squad || []).length && !t.xi) t.xi = autoPickXI(t.squad, formatId);
+  });
+
   room.status = 'finished';
   room.lot = null;
+  room.selectionEndsAt = null;
   broadcastRoom(io, room, { includePool: false });
   io.to(room.code).emit('auction:evaluating', { reason: reason || 'Auction complete.' });
   persistRoom(room);
@@ -451,6 +568,10 @@ export async function finishAuction(io, room, reason) {
       strengths: [],
       weaknesses: [],
       bestXI: [],
+      // An empty side still carries the shape every other entry has, so the results
+      // screen does not have to special-case a team that bought nobody.
+      xi: { players: [], captain: null, keeper: null, impact: null, auto: true },
+      xiVerdict: 'No squad, so there was no side to name.',
       verdict: `${t.name} did not sign a single player.`,
     });
   });

@@ -5,7 +5,7 @@ import { formatINR, metricLabel, textOn } from '../lib/format.js';
 import Icon from './Icon.jsx';
 import VoiceDock from './VoiceDock.jsx';
 
-function Metrics({ metrics }) {
+function Metrics({ metrics, labels }) {
   const entries = Object.entries(metrics || {});
   if (!entries.length) return null;
   return (
@@ -14,7 +14,7 @@ function Metrics({ metrics }) {
         const v = Math.max(0, Math.min(100, Number(value) || 0));
         return (
           <div className="metric" key={key}>
-            <span className="dim">{metricLabel(key)}</span>
+            <span className="dim">{labels?.[key] || metricLabel(key)}</span>
             <span className="mtrack"><i style={{ width: `${v}%` }} /></span>
             <span className="mval mono">{Math.round(v)}</span>
           </div>
@@ -24,7 +24,7 @@ function Metrics({ metrics }) {
   );
 }
 
-function RankCard({ entry, team, settings, defaultOpen }) {
+function RankCard({ entry, team, settings, defaultOpen, result }) {
   const [open, setOpen] = useState(defaultOpen);
 
   return (
@@ -62,19 +62,34 @@ function RankCard({ entry, team, settings, defaultOpen }) {
 
       {open ? (
         <div className="stack" style={{ marginTop: 16 }}>
-          <Metrics metrics={entry.metrics} />
+          <Metrics metrics={entry.metrics} labels={result?.metricLabels} />
 
-          {entry.bestXI?.length ? (
+          {entry.xi?.players?.length ? (
             <div>
-              <div className="section-title" style={{ marginTop: 6 }}>AI best XI</div>
+              <div className="section-title" style={{ marginTop: 6 }}>
+                The XI they picked{entry.xi.auto ? ' · auto-selected' : ''}
+              </div>
               <div className="xi-grid">
-                {entry.bestXI.map((name, i) => (
-                  <div className="xi-item" key={`${name}-${i}`}>
+                {entry.xi.players.map((p, i) => (
+                  <div className="xi-item" key={p.id || `${p.name}-${i}`}>
                     <i>{i + 1}</i>
-                    <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
+                    <span className="xi-item-name">
+                      {p.name}
+                      {p.isCaptain && <b className="xi-badge c">C</b>}
+                      {p.isKeeper && <b className="xi-badge wk">WK</b>}
+                      {p.overseas && <b className="xi-badge">OS</b>}
+                    </span>
+                    <em className="mono" title="Pedigree / current form / format fit">
+                      {p.legacy}·{p.primeForm}·{p.formatFit}
+                    </em>
                   </div>
                 ))}
               </div>
+              <div className="xi-legend dim">
+                Each player reads <b>pedigree · form · {result?.formatName || 'format'} fit</b>, out of 100.
+                {entry.xi.impact ? ` Impact player: ${entry.xi.impact}.` : ''}
+              </div>
+              {entry.xiVerdict ? <p className="muted" style={{ marginTop: 10 }}>{entry.xiVerdict}</p> : null}
             </div>
           ) : null}
 
@@ -101,7 +116,8 @@ export default function Results() {
           <div className="spinner" />
           <h3>Judging the squads</h3>
           <p className="muted" style={{ marginTop: 10, maxWidth: 340 }}>
-            Scoring batting depth, bowling attack, balance and value for money across every team.
+            Weighing every XI on the criteria that matter in this format - pedigree, current form and the
+            raw record, then the shape of the side as a unit.
           </p>
         </div>
       </div>
@@ -115,7 +131,7 @@ export default function Results() {
   return (
     <main className="shell results">
       <section className="card winner-card full">
-        <span className="label">Auction champion</span>
+        <span className="label">{result.formatName ? `${result.formatName} champion` : 'Auction champion'}</span>
         <h2>{winner?.teamName || 'No winner'}</h2>
         {result.headline ? <p className="headline">{result.headline}</p> : null}
         {winnerTeam ? (
@@ -125,8 +141,10 @@ export default function Results() {
             <span className="pill">{formatINR(room.settings.purse - winnerTeam.purse)} spent</span>
           </div>
         ) : null}
+        {result.keyMatchup ? <p className="muted" style={{ marginTop: 14 }}>{result.keyMatchup}</p> : null}
         <p className="dim" style={{ fontSize: 11.5, marginTop: 14 }}>
           {result.source === 'gemini' ? 'Judged by Gemini' : 'Judged by the built-in balance model'}
+          {result.formatName ? ` · scored on ${result.formatName} criteria` : ''}
         </p>
       </section>
 
@@ -163,6 +181,7 @@ export default function Results() {
             entry={entry}
             team={room.teams.find((t) => t.id === entry.teamId)}
             settings={room.settings}
+            result={result}
             defaultOpen={i === 0}
           />
         ))}

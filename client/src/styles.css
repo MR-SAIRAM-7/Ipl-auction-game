@@ -1200,3 +1200,134 @@ button { font: inherit; color: inherit; }
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ---------------------------------------------------------------- */
+/* Format picker (lobby)                                             */
+/* ---------------------------------------------------------------- */
+.format-picker {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 10px;
+}
+.format-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  text-align: left;
+  padding: 13px 14px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  cursor: pointer;
+  transition: border-color 0.12s ease, background 0.12s ease;
+}
+.format-card:hover:not(:disabled) { border-color: var(--accent); }
+.format-card:disabled { cursor: default; opacity: 0.75; }
+.format-card.active {
+  border-color: var(--accent);
+  background: var(--surface-2);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.format-name { font-weight: 650; font-size: 15px; }
+.format-long { font-size: 12px; color: var(--muted); }
+.format-tag { font-size: 12px; color: var(--muted); line-height: 1.45; margin-top: 4px; }
+.format-rules { font-size: 11px; color: var(--dim); margin-top: 6px; }
+
+/* ---------------------------------------------------------------- */
+/* Auction sets (replaces the old upcoming-players list)             */
+/* ---------------------------------------------------------------- */
+.set-list { display: flex; flex-direction: column; }
+.set-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+}
+.set-row:last-child { border-bottom: 0; }
+.set-row .nm { flex: 1; min-width: 0; }
+.set-row.done .nm { color: var(--dim); }
+.set-row.live .nm { font-weight: 650; }
+.set-bar {
+  width: 68px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.set-bar > span { display: block; height: 100%; background: var(--accent); transition: width 0.3s ease; }
+
+/* ---------------------------------------------------------------- */
+/* Naming the XI                                                     */
+/* ---------------------------------------------------------------- */
+.xi-shell { display: flex; flex-direction: column; gap: 14px; padding-bottom: 40px; }
+.xi-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.xi-clock {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  font-variant-numeric: tabular-nums;
+  font-size: 26px;
+  font-weight: 650;
+  line-height: 1;
+}
+.xi-clock span { font-size: 11px; font-weight: 400; color: var(--dim); margin-top: 4px; }
+.xi-clock.urgent { color: var(--neg, #b3261e); }
+
+.xi-rules { display: flex; flex-wrap: wrap; gap: 8px; }
+.xi-rule {
+  font-size: 12px;
+  padding: 5px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--line-2);
+  color: var(--muted);
+  white-space: nowrap;
+}
+.xi-rule.ok { border-color: var(--pos-line); background: var(--pos-bg); color: var(--pos); }
+.xi-rule b { font-weight: 650; }
+
+.xi-pick-grid { display: grid; grid-template-columns: 1.6fr 1fr; gap: 14px; align-items: start; }
+.xi-group {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--dim);
+  margin: 14px 0 2px;
+}
+.xi-row { cursor: pointer; border-radius: var(--radius-sm); }
+.xi-row:hover { background: var(--surface-2); }
+.xi-row.picked { background: var(--surface-2); box-shadow: inset 2px 0 0 var(--accent); }
+.xi-row.impact { box-shadow: inset 2px 0 0 var(--pos); }
+.xi-label { display: block; font-size: 11.5px; color: var(--muted); margin: 14px 0 5px; }
+.xi-pick-grid select { width: 100%; }
+
+.xi-badge {
+  display: inline-block;
+  font-size: 9.5px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  padding: 1px 5px;
+  margin-left: 6px;
+  border-radius: 3px;
+  background: var(--surface-3);
+  color: var(--muted);
+  vertical-align: middle;
+}
+.xi-badge.c { background: var(--accent); color: var(--on-accent); }
+.xi-badge.wk { background: var(--pos-bg); color: var(--pos); border: 1px solid var(--pos-line); }
+.xi-badge.imp { background: var(--pos); color: #fff; }
+
+.xi-item-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.xi-item em { font-style: normal; font-size: 10.5px; color: var(--dim); flex-shrink: 0; }
+.xi-legend { font-size: 11.5px; margin-top: 8px; line-height: 1.5; }
+
+@media (max-width: 760px) {
+  .xi-pick-grid { grid-template-columns: 1fr; }
+  .xi-clock { font-size: 22px; }
+}
+
+/* Sound toggles sit in the top bar next to squads and chat. */
+.btn.ghost.icon.off { opacity: 0.45; }
+.xi-waiting { display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; margin-top: 18px; }

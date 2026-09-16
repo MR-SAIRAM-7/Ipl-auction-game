@@ -30,9 +30,31 @@ const PlayerSchema = new Schema(
     tags: [String],
     blurb: String,
     stats: StatsSchema,
+    set: String,
+    setLabel: String,
+    profile: {
+      type: new Schema(
+        { legacy: Number, primeForm: Number, formatFit: Number },
+        { _id: false },
+      ),
+      default: undefined,
+    },
     aiGenerated: Boolean,
     price: Number,
     soldToTeamId: String,
+  },
+  { _id: false },
+);
+
+/** A franchise's chosen side, submitted after the auction closes. */
+const XISchema = new Schema(
+  {
+    xiIds: [String],
+    captainId: String,
+    keeperId: String,
+    impactId: String,
+    auto: Boolean,
+    submittedAt: Date,
   },
   { _id: false },
 );
@@ -59,6 +81,7 @@ const TeamSchema = new Schema(
     members: [MemberSchema],
     purse: Number,
     squad: [PlayerSchema],
+    xi: { type: XISchema, default: undefined },
     connected: Boolean,
     isHost: Boolean,
   },
@@ -84,6 +107,7 @@ const RoomSchema = new Schema(
     hostId: String,
     status: { type: String, enum: ['lobby', 'generating', 'auction', 'finished'], default: 'lobby' },
     settings: {
+      format: String,
       purse: Number,
       squadSize: Number,
       minSquad: Number,

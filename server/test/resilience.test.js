@@ -137,9 +137,30 @@ describe('host controls', () => {
 
     assert.ok((await ack(rival, 'auction:finish')).error);
 
+    // Ending the auction now opens the XI selection window before the verdict, so
+    // wait for whichever comes first: a side to name, or the verdict itself when no
+    // squad has any players to pick from.
+    const selecting = new Promise((r) => host.once('auction:selecting', r));
     const done = new Promise((r) => host.once('auction:finished', r));
     await ack(host, 'auction:finish');
-    const finished = await Promise.race([done, wait(150_000).then(() => null)]);
+
+    const opened = await Promise.race([selecting, done, wait(8000).then(() => null)]);
+    assert.ok(opened, 'ending early did nothing at all');
+
+    // If a side was bought, name one so the verdict does not wait out the full window.
+    const state = await ack(host, 'room:peek').catch(() => null);
+    if (state?.room?.status === 'selecting') {
+      const team = state.room.teams.find((t) => t.squad?.length);
+      if (team) {
+        await ack(host, 'auction:xi', {
+          xiIds: team.squad.slice(0, 11).map((p) => p.id),
+          captainId: team.squad[0]?.id,
+          keeperId: team.squad.find((p) => p.role === 'Wicket-keeper')?.id,
+        });
+      }
+    }
+
+    const finished = await Promise.race([done, wait(160_000).then(() => null)]);
     assert.ok(finished, 'ending early produced no verdict');
     assert.ok(Array.isArray(finished.result.rankings));
   });

@@ -1,4 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { announce, announceLot, announceSold, announceUnsold, sfx, unlock } from '../lib/audio.js';
+import { formatINR } from '../lib/format.js';
 import { getSocket, emitAck } from '../lib/socket.js';
 import { forkIdentity, getIdentity, rememberRoom, saveIdentity } from '../lib/identity.js';
 import { getConfig } from '../lib/api.js';
@@ -39,6 +41,12 @@ export function GameProvider({ children }) {
   const [flash, setFlash] = useState(null); // short-lived bid animation payload
 
   const joinArgsRef = useRef(null);
+  /**
+   * The socket effect is mounted once, so it would close over the first `me`. Sound
+   * cues need to know whether a bid was ours, which means reading the live value.
+   */
+  const meRef = useRef(me);
+  meRef.current = me;
 
   const pushToast = useCallback((type, text) => {
     toastSeq += 1;
@@ -79,15 +87,14 @@ export function GameProvider({ children }) {
     };
     const onDisconnect = () => setConnected(false);
 
-    const onState = (next) =>
-      setRoom((prev) => ({
-        ...next,
-        // The server omits the heavy pool on delta broadcasts; keep what we have.
-        pool: next.pool ?? prev?.pool ?? [],
-      }));
+    // The server no longer sends the upcoming players at all - only the lot on the
+    // block and how far through each set the auction is.
+    const onState = (next) => setRoom(() => next);
 
-    const onLot = (lot) =>
+    const onLot = (lot) => {
+      announceLot(lot.player, { marquee: lot.player?.set === 'marquee', setLabel: lot.player?.setLabel });
       setRoom((prev) => (prev ? { ...prev, lot, lotIndex: lot.index, status: 'auction' } : prev));
+    };
 
     const onBid = (payload) => {
       setRoom((prev) => {
@@ -111,6 +118,8 @@ export function GameProvider({ children }) {
           },
         };
       });
+      if (payload.teamId === meRef.current?.teamId) sfx.bid();
+      else sfx.outbid();
       setFlash({ key: `${payload.teamId}-${payload.amount}`, ...payload });
     };
 
@@ -124,6 +133,8 @@ export function GameProvider({ children }) {
       );
 
     const onClosed = ({ sale, teams }) => {
+      if (sale.status === 'sold') announceSold(sale.player, sale.teamName, formatINR(sale.amount));
+      else announceUnsold(sale.player);
       setRoom((prev) => {
         if (!prev) return prev;
         const purses = new Map(teams.map((t) => [t.id, t.purse]));
@@ -143,8 +154,18 @@ export function GameProvider({ children }) {
       setFlash(null);
     };
 
-    const onCommentary = (line) =>
+    const onCommentary = (line) => {
+      // The sale announcement has just played, so let it finish rather than cutting
+      // it off with the colour commentary that follows.
+      setTimeout(() => announce(line, { interrupt: false, rate: 1.06 }), 2200);
       setRoom((prev) => (prev ? { ...prev, commentary: [...(prev.commentary || []), line].slice(-12) } : prev));
+    };
+
+    const onSelecting = ({ endsAt, seconds }) => {
+      sfx.finish();
+      setRoom((prev) => (prev ? { ...prev, status: 'selecting', selectionEndsAt: endsAt, lot: null } : prev));
+      pushToast('info', `Auction over. Name your XI - ${seconds} seconds.`);
+    };
 
     const onEvaluating = () => setEvaluating(true);
 
@@ -169,6 +190,7 @@ export function GameProvider({ children }) {
     socket.on('auction:clock', onClock);
     socket.on('auction:closed', onClosed);
     socket.on('auction:commentary', onCommentary);
+    socket.on('auction:selecting', onSelecting);
     socket.on('auction:evaluating', onEvaluating);
     socket.on('auction:finished', onFinished);
     socket.on('chat:new', onChat);
@@ -178,7 +200,15 @@ export function GameProvider({ children }) {
 
     if (socket.connected) setConnected(true);
 
+    // Browsers will not start audio until the page has been interacted with, so the
+    // first genuine tap anywhere is what enables the auctioneer.
+    const onFirstGesture = () => unlock();
+    window.addEventListener('pointerdown', onFirstGesture, { once: true });
+    window.addEventListener('keydown', onFirstGesture, { once: true });
+
     return () => {
+      window.removeEventListener('pointerdown', onFirstGesture);
+      window.removeEventListener('keydown', onFirstGesture);
       socket.off('connect', onConnect);
       socket.off('disconnect', onDisconnect);
       socket.off('room:state', onState);
@@ -188,6 +218,7 @@ export function GameProvider({ children }) {
       socket.off('auction:clock', onClock);
       socket.off('auction:closed', onClosed);
       socket.off('auction:commentary', onCommentary);
+      socket.off('auction:selecting', onSelecting);
       socket.off('auction:evaluating', onEvaluating);
       socket.off('auction:finished', onFinished);
       socket.off('chat:new', onChat);
@@ -285,6 +316,16 @@ export function GameProvider({ children }) {
     return res;
   }, [pushToast]);
 
+  /** Submit the side this franchise wants judged. Errors come back as a checklist. */
+  const submitXI = useCallback(
+    async (selection) => {
+      const res = await emitAck('auction:xi', selection);
+      if (res.error) pushToast('error', res.error);
+      return res;
+    },
+    [pushToast],
+  );
+
   const reset = useCallback(async () => {
     const res = await emitAck('auction:reset', {});
     if (res.error) pushToast('error', res.error);
@@ -337,6 +378,7 @@ export function GameProvider({ children }) {
       start,
       skipLot,
       finish,
+      submitXI,
       reset,
       updateSettings,
       updateTeam,
@@ -344,7 +386,7 @@ export function GameProvider({ children }) {
     }),
     [
       identity, connected, room, me, myTeam, toasts, pushToast, voiceRoster, evaluating,
-      serverConfig, flash, join, leave, bid, pass, start, skipLot, finish, reset, updateSettings,
+      serverConfig, flash, join, leave, bid, pass, start, skipLot, finish, submitXI, reset, updateSettings,
       updateTeam, sendChat,
     ],
   );

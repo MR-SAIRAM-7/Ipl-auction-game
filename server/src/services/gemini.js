@@ -4,8 +4,12 @@
  * or the JSON is malformed, we fall back to a local generator / heuristic so the
  * auction never stalls.
  */
-import { generateLocalPool } from './playerPool.js';
+import { generateLocalPool, intoAuctionSets } from './playerPool.js';
 import { LAKH, MAX_BID, formatINR, roundToStep } from '../utils/money.js';
+import { METRIC_LABELS, getFormat, metricKeysFor } from '../data/formats.js';
+import { playerProfile, scoreXI } from './playerModel.js';
+import { resolveXI } from './playingXI.js';
+import { localCommentary } from './commentary.js';
 
 const API_ROOT = 'https://generativelanguage.googleapis.com/v1beta/models';
 const TIMEOUT_MS = 30_000;
@@ -188,18 +192,24 @@ export function shuffle(list) {
  * missing key or a failed call still gives you real names.
  * @returns {Promise<{players: any[], source: 'gemini'|'local', theme: string}>}
  */
-export async function generatePlayerPool({ count = 40 } = {}) {
+export async function generatePlayerPool({ count = 40, format: formatId = 'ipl' } = {}) {
   const theme = THEMES[Math.floor(Math.random() * THEMES.length)];
   const seed = Math.random().toString(36).slice(2, 10).toUpperCase();
+  const format = getFormat(formatId);
+
+  /** Gemini returns a flat list; give it the same profiles and set order as the local pool. */
+  const dress = (players) =>
+    intoAuctionSets(players.map((p) => ({ ...p, profile: playerProfile(p, format.id) })));
 
   if (!geminiEnabled()) {
-    return { players: shuffle(generateLocalPool(count)), source: 'local', theme };
+    return { players: generateLocalPool(count, format.id), source: 'local', theme };
   }
 
   const prompt = [
-    'You are the scouting engine for an IPL-style player auction game played between friends.',
+    `You are the scouting engine for a ${format.longName} (${format.name}) player auction game played between friends.`,
     '',
     `Pick EXACTLY ${count} REAL cricketers for the auction pool.`,
+    `The auction is being played for ${format.longName}, so favour players who are genuinely good in THAT format - ${format.tagline}`,
     `Randomisation seed: ${seed}. Slant this season's list towards ${theme}.`,
     '',
     'Hard rules:',
@@ -228,36 +238,27 @@ export async function generatePlayerPool({ count = 40 } = {}) {
     });
     const players = normalisePlayers(Array.isArray(raw) ? raw : []);
     if (players.length < Math.min(12, count)) throw new Error('Gemini pool too small');
-    return { players: shuffle(players), source: 'gemini', theme };
+    return { players: dress(players), source: 'gemini', theme };
   } catch (err) {
     console.warn('[gemini] pool generation failed, using local pool:', err.message);
-    return { players: shuffle(generateLocalPool(count)), source: 'local', theme };
+    return { players: generateLocalPool(count, format.id), source: 'local', theme };
   }
 }
 
 /* ------------------------------------------------------------------ */
 /* 2. Post-auction verdict                                             */
 /* ------------------------------------------------------------------ */
-
-export const METRIC_KEYS = [
-  'battingDepth',
-  'bowlingAttack',
-  'allRounderBalance',
-  'powerplayImpact',
-  'deathOvers',
-  'spinOptions',
-  'fieldingAndKeeping',
-  'squadBalance',
-  'valueForMoney',
-];
-
-const METRICS_SCHEMA = {
+/**
+ * Metrics are per format - a Test side is not judged on its death overs - so the
+ * schema handed to Gemini is built per call from the format's own weight table.
+ */
+const metricsSchemaFor = (formatId) => ({
   type: 'OBJECT',
-  properties: Object.fromEntries(METRIC_KEYS.map((k) => [k, { type: 'NUMBER' }])),
-  required: METRIC_KEYS,
-};
+  properties: Object.fromEntries(metricKeysFor(formatId).map((k) => [k, { type: 'NUMBER' }])),
+  required: metricKeysFor(formatId),
+});
 
-const VERDICT_SCHEMA = {
+const verdictSchemaFor = (formatId) => ({
   type: 'OBJECT',
   properties: {
     winnerTeamId: { type: 'STRING' },
@@ -272,15 +273,15 @@ const VERDICT_SCHEMA = {
           teamName: { type: 'STRING' },
           rank: { type: 'INTEGER' },
           overallScore: { type: 'NUMBER' },
-          metrics: METRICS_SCHEMA,
+          metrics: metricsSchemaFor(formatId),
           strengths: { type: 'ARRAY', items: { type: 'STRING' } },
           weaknesses: { type: 'ARRAY', items: { type: 'STRING' } },
-          bestXI: { type: 'ARRAY', items: { type: 'STRING' } },
+          xiVerdict: { type: 'STRING' },
           verdict: { type: 'STRING' },
         },
         required: [
           'teamId', 'teamName', 'rank', 'overallScore', 'metrics',
-          'strengths', 'weaknesses', 'bestXI', 'verdict',
+          'strengths', 'weaknesses', 'xiVerdict', 'verdict',
         ],
       },
     },
@@ -294,76 +295,112 @@ const VERDICT_SCHEMA = {
       properties: { playerName: { type: 'STRING' }, teamName: { type: 'STRING' }, reason: { type: 'STRING' } },
       required: ['playerName', 'teamName', 'reason'],
     },
+    keyMatchup: { type: 'STRING' },
   },
   required: ['winnerTeamId', 'headline', 'summary', 'rankings', 'bestBuy', 'worstBuy'],
-};
+});
 
-function describeTeamsForPrompt(teams, settings) {
+/**
+ * Describes each side the way a selector would read it: the XI first, because that is
+ * what is being judged, then the bench, then the money. Every player carries the three
+ * things the verdict is asked to weigh - what they have already done (pedigree), where
+ * they are now (form), and what their record says in this format.
+ */
+function describeTeamsForPrompt(teams, settings, formatId) {
+  const format = getFormat(formatId);
   return teams
     .map((t) => {
-      const squad = t.squad
-        .map((p) => {
-          const line1 = `    - ${p.name} (${p.role}, ${p.country}${p.overseas ? ', overseas' : ''}, rating ${p.rating})`;
-          const line2 = ` bought ${formatINR(p.price)} (base ${formatINR(p.basePrice)})`;
-          const line3 = ` | bat avg ${p.stats.battingAverage}, SR ${p.stats.strikeRate}, wkts ${p.stats.wickets}, econ ${p.stats.economy}`;
-          const line4 = ` | tags: ${(p.tags || []).join(', ') || 'none'}`;
-          return line1 + line2 + line3 + line4;
-        })
-        .join('\n');
+      const sel = resolveXI(t, formatId);
+      const inXI = new Set(sel.players.map((p) => p.id));
+      const line = (p, mark = '') => {
+        const s = p.stats || {};
+        const prof = p.profile || {};
+        const role = `${p.role}${p.overseas ? ', overseas' : ''}`;
+        const record = `bat ${s.battingAverage} @ SR ${s.strikeRate}` +
+          (s.wickets ? `, ${s.wickets} wkts @ ${s.bowlingAverage} econ ${s.economy}` : '') +
+          `, ${s.matches} matches`;
+        const standing = `pedigree ${prof.legacy ?? '?'}/100, form ${prof.primeForm ?? '?'}/100, ${format.name} fit ${prof.formatFit ?? '?'}/100`;
+        const tags = (p.tags || []).join(', ') || 'none';
+        return `      ${mark}${p.name} (${role}) - ${record} | ${standing} | tags: ${tags} | paid ${formatINR(p.price ?? 0)} (base ${formatINR(p.basePrice ?? 0)})`;
+      };
+
+      const bench = (t.squad || []).filter((p) => !inXI.has(p.id));
+      const overseasInXI = sel.players.filter((p) => p.overseas).length;
       const header = `  TEAM id=${t.id} name="${t.name}" owner="${t.ownerName}"`;
-      const money = `    Spent ${formatINR(settings.purse - t.purse)} of ${formatINR(settings.purse)} | Remaining ${formatINR(t.purse)} | Squad size ${t.squad.length}`;
-      return [header, money, squad || '    (no players bought)'].join('\n');
+      const money = `    Spent ${formatINR(settings.purse - t.purse)} of ${formatINR(settings.purse)} | ${t.squad.length} bought | ${overseasInXI} overseas in the XI`;
+      const capt = sel.captain ? `${sel.captain.name} (captain)` : 'no captain named';
+      const keep = sel.keeper ? `${sel.keeper.name} (wk)` : 'no keeper named';
+      const impact = format.impactPlayer ? ` | impact sub: ${sel.impact ? sel.impact.name : 'none named'}` : '';
+      const leadership = `    Leading: ${capt}, ${keep}${impact}${sel.auto ? ' [auto-picked, the team never submitted one]' : ''}`;
+
+      return [
+        header,
+        money,
+        leadership,
+        `    PLAYING XI (${sel.players.length}):`,
+        sel.players.map((p) => line(p, p.id === sel.captain?.id ? '(C) ' : p.id === sel.keeper?.id ? '(WK) ' : '')).join('\n') || '      (none)',
+        bench.length ? `    BENCH (${bench.length}):` : '',
+        bench.length ? bench.map((p) => line(p)).join('\n') : '',
+      ].filter(Boolean).join('\n');
     })
     .join('\n\n');
 }
 
-const pretty = (k) => k.replace(/([A-Z])/g, ' $1').toLowerCase().trim();
+const pretty = (k) => METRIC_LABELS[k] || k.replace(/([A-Z])/g, ' $1').toLowerCase().trim();
 
-/** Heuristic scoring used when Gemini is unavailable. */
+/**
+ * Scoring used when Gemini is unavailable - and the number the AI verdict is checked
+ * against. It judges the submitted XI through the format's own weights, so the same
+ * squad genuinely scores differently in a Test than it does in the IPL.
+ */
 export function heuristicVerdict(teams, settings) {
+  const formatId = getFormat(settings?.format).id;
+  const format = getFormat(formatId);
+
   const scored = teams.map((t) => {
-    const squad = t.squad;
-    const by = (r) => squad.filter((p) => p.role === r);
-    const avg = (arr, f) => (arr.length ? arr.reduce((s, p) => s + f(p), 0) / arr.length : 0);
-    const batters = [...by('Batter'), ...by('Wicket-keeper')];
-    const bowlers = by('Bowler');
-    const allr = by('All-rounder');
+    const sel = resolveXI(t, formatId);
     const spend = settings.purse - t.purse;
-    const clamp = (v) => Math.max(0, Math.min(100, v));
-
-    const metrics = {
-      battingDepth: clamp(avg([...batters, ...allr], (p) => p.rating) * (Math.min(6, batters.length + allr.length) / 6)),
-      bowlingAttack: clamp(avg([...bowlers, ...allr], (p) => p.rating) * (Math.min(5, bowlers.length + allr.length) / 5)),
-      allRounderBalance: clamp(allr.length * 22 + avg(allr, (p) => p.rating) * 0.4),
-      powerplayImpact: clamp(avg(squad, (p) => p.stats.strikeRate) * 0.5),
-      deathOvers: clamp(
-        avg(squad.filter((p) => (p.tags || []).some((x) => /death|finisher|yorker/i.test(x))), (p) => p.rating) || 45,
-      ),
-      spinOptions: clamp(squad.filter((p) => /spin|break|orthodox|googly/i.test(p.bowlingStyle || '')).length * 25 + 25),
-      fieldingAndKeeping: clamp(by('Wicket-keeper').length * 28 + avg(squad, (p) => Math.min(60, p.stats.catches)) * 0.7),
-      squadBalance: clamp(
-        100
-        - Math.abs(4 - batters.length) * 9
-        - Math.abs(4 - bowlers.length) * 9
-        - Math.abs(2 - allr.length) * 8
-        - Math.abs(1 - by('Wicket-keeper').length) * 10,
-      ),
-      // ~25 rating points bought per lakh spent is an excellent return; scale against that.
-      valueForMoney: clamp(spend > 0 ? (squad.reduce((s, p) => s + p.rating, 0) / (spend / LAKH) / 25) * 100 : 0),
-    };
-
-    const overallScore = Number((Object.values(metrics).reduce((s, v) => s + v, 0) / METRIC_KEYS.length).toFixed(1));
+    const { metrics, overall } = scoreXI(sel.players, formatId, {
+      spend,
+      purse: settings.purse,
+      captainId: sel.captainId,
+    });
     const ordered = Object.entries(metrics).sort((a, b) => b[1] - a[1]);
+    const shortOfXI = sel.players.length < format.xiSize;
+
+    const topName = [...sel.players]
+      .sort((a, b) => (b.profile?.formatFit ?? 0) - (a.profile?.formatFit ?? 0))[0];
 
     return {
       teamId: t.id,
       teamName: t.name,
-      overallScore,
+      overallScore: shortOfXI ? Math.round(overall * (sel.players.length / format.xiSize)) : overall,
       metrics,
-      strengths: ordered.slice(0, 2).map(([k, v]) => `Strong ${pretty(k)} (${v.toFixed(0)}/100)`),
-      weaknesses: ordered.slice(-2).map(([k, v]) => `Thin ${pretty(k)} (${v.toFixed(0)}/100)`),
-      bestXI: [...squad].sort((a, b) => b.rating - a.rating).slice(0, 11).map((p) => p.name),
-      verdict: `${t.name} spent ${formatINR(spend)} on ${squad.length} players and averaged a rating of ${avg(squad, (p) => p.rating).toFixed(0)}.`,
+      strengths: ordered.slice(0, 3).map(([k, v]) => `${pretty(k)} (${v}/100)`),
+      weaknesses: ordered.slice(-3).reverse().map(([k, v]) => `${pretty(k)} (${v}/100)`),
+      bestXI: sel.players.map((p) => p.name),
+      xi: {
+        players: sel.players.map((p) => ({
+          id: p.id,
+          name: p.name,
+          role: p.role,
+          overseas: Boolean(p.overseas),
+          price: p.price ?? 0,
+          legacy: p.profile?.legacy ?? null,
+          primeForm: p.profile?.primeForm ?? null,
+          formatFit: p.profile?.formatFit ?? null,
+          isCaptain: p.id === sel.captainId,
+          isKeeper: p.id === sel.keeperId,
+        })),
+        captain: sel.captain?.name ?? null,
+        keeper: sel.keeper?.name ?? null,
+        impact: sel.impact?.name ?? null,
+        auto: Boolean(sel.auto),
+      },
+      xiVerdict: shortOfXI
+        ? `Could only field ${sel.players.length} of ${format.xiSize}, which caps how far this side can go.`
+        : `${topName ? `${topName.name} is the one who has to deliver` : 'A side without a standout'}, with ${pretty(ordered[0][0]).toLowerCase()} the clear strength.`,
+      verdict: `${t.name} spent ${formatINR(spend)} on ${t.squad.length} players. In ${format.name} terms this side reads best for ${pretty(ordered[0][0]).toLowerCase()} and thinnest for ${pretty(ordered[ordered.length - 1][0]).toLowerCase()}.`,
     };
   });
 
@@ -372,77 +409,119 @@ export function heuristicVerdict(teams, settings) {
     s.rank = i + 1;
   });
 
-  const allBuys = teams.flatMap((t) => t.squad.map((p) => ({ ...p, teamName: t.name })));
-  const value = [...allBuys].sort((a, b) => b.rating / Math.max(1, b.price) - a.rating / Math.max(1, a.price));
+  // Value is worth-in-this-format per rupee, so a bargain in a Test is not the same
+  // buy as a bargain in the IPL.
+  const allBuys = teams.flatMap((t) =>
+    (t.squad || []).map((p) => ({
+      ...p,
+      teamName: t.name,
+      value: (p.profile?.formatFit ?? 0) / Math.max(1, (p.price ?? 0) / LAKH),
+    })),
+  );
+  const value = [...allBuys].sort((a, b) => b.value - a.value);
   const best = value[0];
   const worst = value.length > 1 ? value[value.length - 1] : null;
 
   return {
+    format: formatId,
+    formatName: format.name,
+    metricKeys: metricKeysFor(formatId),
+    metricLabels: Object.fromEntries(metricKeysFor(formatId).map((k) => [k, pretty(k)])),
     winnerTeamId: scored[0] ? scored[0].teamId : null,
-    headline: scored[0] ? `${scored[0].teamName} win the auction` : 'No teams to judge',
-    summary: 'Scored with the built-in balance model because Gemini was unavailable. Add a GEMINI_API_KEY for a full analyst breakdown.',
+    headline: scored[0] ? `${scored[0].teamName} build the best ${format.name} side` : 'No teams to judge',
+    summary: `Scored with the built-in ${format.name} model, which weighs each XI on ${metricKeysFor(formatId).length} format-specific metrics. Add a GEMINI_API_KEY for a full analyst breakdown.`,
     rankings: scored,
     bestBuy: best
-      ? { playerName: best.name, teamName: best.teamName, reason: `Rating ${best.rating} for only ${formatINR(best.price)}.` }
+      ? { playerName: best.name, teamName: best.teamName, reason: `${format.name} fit of ${best.profile?.formatFit ?? '?'} for only ${formatINR(best.price)}.` }
       : { playerName: '-', teamName: '-', reason: 'No players sold.' },
     worstBuy: worst
-      ? { playerName: worst.name, teamName: worst.teamName, reason: `Paid ${formatINR(worst.price)} for a rating of ${worst.rating}.` }
+      ? { playerName: worst.name, teamName: worst.teamName, reason: `Paid ${formatINR(worst.price)} for a ${format.name} fit of just ${worst.profile?.formatFit ?? '?'}.` }
       : { playerName: '-', teamName: '-', reason: 'Not enough sales to judge.' },
     source: 'local',
   };
 }
 
 export async function evaluateAuction({ teams, settings }) {
-  if (!teams.length || !geminiEnabled()) return heuristicVerdict(teams, settings);
+  const formatId = getFormat(settings?.format).id;
+  const format = getFormat(formatId);
+  const local = heuristicVerdict(teams, settings);
+  if (!teams.length || !geminiEnabled()) return local;
 
+  const keys = metricKeysFor(formatId);
   const prompt = [
-    'You are a world-class T20 cricket analyst judging a completed fantasy IPL auction.',
+    `You are a world-class cricket analyst judging completed ${format.longName} squads (${format.name}).`,
     '',
-    `Auction rules: every team started with a purse of ${formatINR(settings.purse)} and no single bid could exceed ${formatINR(MAX_BID)}.`,
-    `A full squad is ${settings.squadSize} players and the minimum viable squad is ${settings.minSquad}.`,
+    `FORMAT: ${format.name} - ${format.longName}. ${format.tagline}`,
+    format.overs ? `Each side bowls ${format.overs} overs.` : 'Unlimited overs across five days; you must take twenty wickets to win.',
+    format.maxOverseasInXI != null ? `A maximum of ${format.maxOverseasInXI} overseas players may play in the XI.` : 'There is no overseas restriction.',
+    format.impactPlayer ? 'An impact substitute may replace a player mid-match.' : '',
+    '',
+    `Auction rules: every team started with ${formatINR(settings.purse)} and no single bid could exceed ${formatINR(MAX_BID)}.`,
+    '',
+    'Each team has already chosen its playing XI. JUDGE THE XI, not the whole squad - the bench only matters as cover and as evidence of how the money was spent.',
     '',
     'SQUADS:',
-    describeTeamsForPrompt(teams, settings),
+    describeTeamsForPrompt(teams, settings, formatId),
     '',
-    'Judge every team on these nine metrics, each scored 0-100:',
-    METRIC_KEYS.join(', ') + '.',
+    `Score every team on these ${keys.length} ${format.name}-specific metrics, each 0-100:`,
+    keys.map((k) => `- ${k}: ${pretty(k)}`).join('\n'),
+    '',
+    'How to judge, and this matters more than anything else:',
+    `- Judge every player BY ${format.name.toUpperCase()} STANDARDS. A strike rate of 150 is decisive in the IPL and close to irrelevant in a Test; a batting average of 45 is the other way round. A death-overs specialist is a luxury in a Test. An anchor who bats through is worth far more over five days than over twenty overs.`,
+    '- Weigh three separate things about each player and say which you are leaning on: PEDIGREE (what they have already achieved over a career), CURRENT FORM (where they are on their own curve right now), and RECORD (the raw batting average, strike rate, wickets, economy and matches given above). A great name in decline is not the same as a player at their peak.',
+    '- Then judge the XI AS A UNIT: does it have a top order, enough bowling to take the wickets this format demands, a keeper, and balance? A collection of stars in the wrong shape should lose to a balanced side.',
+    '- Punish an XI that is short of players, missing a keeper, or unable to bowl its overs.',
+    '- Reward buying well: a high-value player bought cheaply is a real advantage.',
     '',
     'Then:',
-    '- "overallScore" is a weighted 0-100 number. Weight bowlingAttack and battingDepth most heavily, then squadBalance and allRounderBalance, then the rest. Punish squads that are short of players or missing a wicket-keeper. Reward squads that bought high ratings cheaply.',
+    '- "overallScore" is a weighted 0-100 number reflecting the metric weights for this format.',
     '- Rank all teams from 1 (best) downwards. Ranks must be unique.',
-    '- "winnerTeamId" MUST be the teamId of the rank-1 team, copied exactly from the list above.',
-    '- "bestXI" is the strongest playing eleven from that squad, by player name. If the squad has fewer than 11 players, list everyone.',
-    '- "strengths" and "weaknesses": 2-3 short bullet phrases each, naming actual players where it helps.',
-    '- "verdict": two sentences of sharp, confident analysis for that team.',
-    '- "headline": a punchy broadcast-style headline about the winner, max 12 words.',
-    '- "summary": 3-4 sentences comparing the top teams and explaining why the winner edged it.',
-    '- "bestBuy" and "worstBuy": the single best and worst value-for-money purchases across the whole auction.',
+    '- "winnerTeamId" MUST be the teamId of the rank-1 team, copied exactly from above.',
+    '- "strengths" and "weaknesses": 2-3 short phrases each, naming actual players.',
+    '- "xiVerdict": one or two sentences on the XI specifically - its shape, who carries it, where it breaks.',
+    '- "verdict": two sentences of sharp, confident analysis of the team overall.',
+    '- "headline": a punchy broadcast headline about the winner, max 12 words.',
+    '- "summary": 3-4 sentences comparing the top sides and explaining why the winner edged it, in this format.',
+    '- "bestBuy" / "worstBuy": best and worst value purchases across the auction, judged in this format.',
+    '- "keyMatchup": one sentence on the contest between the top two sides that would decide the game.',
     '',
-    'Be decisive and specific. Return ONLY JSON.',
-  ].join('\n');
+    'Be decisive and specific. Never hedge. Return ONLY JSON.',
+  ].filter(Boolean).join('\n');
 
   try {
     const raw = await callGemini({
       prompt,
-      schema: VERDICT_SCHEMA,
+      schema: verdictSchemaFor(formatId),
       temperature: 0.45,
       maxOutputTokens: 65_536,
     });
     const validIds = new Set(teams.map((t) => t.id));
+    const byId = new Map(local.rankings.map((r) => [r.teamId, r]));
     const rankings = (raw.rankings || [])
       .filter((r) => validIds.has(r.teamId))
       .sort((a, b) => (a.rank || 99) - (b.rank || 99))
-      .map((r, i) => ({ ...r, rank: i + 1 }));
+      .map((r, i) => ({
+        ...r,
+        rank: i + 1,
+        // The XI itself is decided by the server, never by the model - the model is
+        // judging a side, not picking one.
+        xi: byId.get(r.teamId)?.xi ?? null,
+        bestXI: byId.get(r.teamId)?.bestXI ?? [],
+      }));
     if (!rankings.length) throw new Error('Gemini returned no usable rankings');
     return {
       ...raw,
+      format: formatId,
+      formatName: format.name,
+      metricKeys: keys,
+      metricLabels: Object.fromEntries(keys.map((k) => [k, pretty(k)])),
       rankings,
       winnerTeamId: validIds.has(raw.winnerTeamId) ? raw.winnerTeamId : rankings[0].teamId,
       source: 'gemini',
     };
   } catch (err) {
     console.warn('[gemini] verdict failed, using heuristic:', err.message);
-    return heuristicVerdict(teams, settings);
+    return local;
   }
 }
 
@@ -450,8 +529,19 @@ export async function evaluateAuction({ teams, settings }) {
 /* 3. Auctioneer commentary (best-effort, never blocks the auction)    */
 /* ------------------------------------------------------------------ */
 
-export async function auctioneerLine({ player, teamName, price, unsold }) {
-  if (!geminiEnabled() || process.env.GEMINI_COMMENTARY === 'false') return null;
+export async function auctioneerLine({ player, teamName, price, unsold, formatId = 'ipl' }) {
+  const mode = process.env.GEMINI_COMMENTARY;
+  if (mode === 'false' || mode === 'off') return null;
+
+  /**
+   * Local by default, and deliberately so. One call per lot against a free tier that
+   * allows twenty a day meant a single auction burned the whole quota and took the
+   * pool generation and the final verdict down with it. Those two are worth spending
+   * on; a one-line quip is not. Set GEMINI_COMMENTARY=gemini to buy it back.
+   */
+  if (mode !== 'gemini' || !geminiEnabled()) {
+    return localCommentary({ player, teamName, price, unsold, formatId });
+  }
 
   const prompt = unsold
     ? `You are a witty IPL auctioneer. ${player.name} (${player.role}, rating ${player.rating}, base ${formatINR(player.basePrice)}) went UNSOLD. Give ONE short line of live commentary, max 16 words. No quotes, no emoji.`
@@ -461,6 +551,7 @@ export async function auctioneerLine({ player, teamName, price, unsold }) {
     const line = await callGemini({ prompt, temperature: 1.1, maxOutputTokens: 256, thinkingBudget: 0 });
     return line.replace(/^["']|["']$/g, '').slice(0, 160);
   } catch {
-    return null;
+    // Quota, timeout, anything - there is always a line to fall back on.
+    return localCommentary({ player, teamName, price, unsold, formatId });
   }
 }

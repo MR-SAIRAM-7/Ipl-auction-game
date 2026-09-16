@@ -15,11 +15,14 @@ auction and WebRTC for voice.
 | | |
 |---|---|
 | **Real players** | The pool is made of real cricketers — Kohli, Bumrah, Russell, Rashid Khan, de Villiers and 110 others — with their actual role, country, batting hand and bowling style. Gemini picks a fresh list each auction when a key is set; without one, a built-in roster of 115 is used. |
-| **Live auction** | Server-authoritative clock, a proper 1-3 minute spell on the block for every player, IPL-style bid slabs, pass-to-speed-up, an unsold round at half base price, and SOLD/UNSOLD stamps. |
+| **Three formats** | Play the auction for the **IPL**, an **ODI** or a **Test**. The format is not a label: it changes which players are worth money, what a legal XI looks like and how the squads are judged. A death-overs specialist is priceless in the IPL and close to useless over five days; an anchor who averages 45 is the other way round. |
+| **Live auction** | Server-authoritative clock, a proper 1-3 minute spell on the block for every player, IPL-style bid slabs, pass-to-speed-up, an unsold round at half base price, and SOLD/UNSOLD stamps. Players come up in **sets**, the way a real auction runs one - a marquee set, then batters, keepers, all-rounders and bowlers in numbered rounds. **Who is coming up next is never sent to the client**, so there is nothing to read out of devtools. |
+| **Pick your XI** | When the hammer falls for the last time, every franchise names a **playing XI, a captain and a wicket-keeper** - plus an **impact player** in the IPL, and inside the four-overseas cap. The server validates the side and auto-picks the best legal one for anybody who runs out of time. |
+| **Sound and an auctioneer** | Synthesised gavel, bid and fanfare cues, and a spoken announcer that names every player coming under the hammer and every sale. Commentary is written on the server from the real numbers - the price against the base, whether a bidding war broke out, what the player is for in this format - so it costs nothing and always works. |
 | **Franchises, not just players** | A franchise can seat up to 8 people - an owner, a coach, whoever else you drag in. They share one purse, any of them can raise the paddle, and every bid is attributed to whoever made it. Pick a franchise on the join screen or start your own. |
 | **50 lakh rules** | Every team starts with a ₹50,00,000 purse and **no single bid can exceed ₹50 lakh**. Teams must hold back enough to fill a minimum squad, so nobody can blow everything on one signing. |
 | **Voice chat** | WebRTC mesh so everyone can talk while they bid, with live speaking indicators and mute. Your franchise gets a **private huddle** by default and you can switch to the **room channel** to sledge everyone else. The call runs for the whole room - lobby, auction and results - and rebuilds itself after a dropout instead of going quietly silent. |
-| **AI verdict** | At the end Gemini scores every squad across nine metrics, ranks the teams, picks each team's best XI and names the best and worst buys of the auction. |
+| **AI verdict** | At the end every **XI** - not merely the squad - is scored on metrics chosen for the format being played, weighing three separate things about each player: **pedigree** (what they have already achieved), **current form** (where they are on their own curve) and the **raw record**. Gemini writes the analysis when a key is available; the built-in model scores the same way without one. |
 | **Mobile first** | A quiet, minimal light interface — one-tap bidding, a fixed bid bar, big readable numbers, safe-area support. Works great on desktop too. |
 
 Everything degrades gracefully: **no Gemini key and no MongoDB are required to play.**
@@ -92,9 +95,9 @@ All of `server/.env` is optional. The app boots and plays without any of it.
 | `TRUST_PROXY_HOPS` | `1` | Proxy hops in front of the app, so rate limiting sees the real client IP. |
 | `MAX_ROOMS` / `MAX_TEAMS_PER_ROOM` / `MAX_MEMBERS_PER_TEAM` | `500` / `12` / `8` | Capacity ceilings. |
 | `MONGODB_URI` | – | If set, rooms, squads and results are persisted and survive a restart. If unset or unreachable, rooms stay in memory. |
-| `GEMINI_API_KEY` | – | Enables AI player generation, the final verdict and auctioneer commentary. Get one free at <https://aistudio.google.com/apikey>. |
+| `GEMINI_API_KEY` | – | Enables AI player generation and the final verdict. Get one free at <https://aistudio.google.com/apikey>. **The free tier allows only 20 requests per day**, so the app spends them on the pool and the verdict and writes commentary locally. |
 | `GEMINI_MODEL` | `gemini-2.5-flash` | Any Gemini model id. |
-| `GEMINI_COMMENTARY` | `true` | Set to `false` to skip the one-line auctioneer commentary after each sale. |
+| `GEMINI_COMMENTARY` | `local` | `local` writes the auctioneer's line on the server for free, `gemini` buys it from the API (one call per lot - see the quota note below), `false` turns commentary off. |
 | `METERED_APP_NAME` / `METERED_API_KEY` | – | Metered Open Relay TURN. **Required for voice on mobile data.** Free monthly allowance and no credit card, so start here. The app name is the subdomain (`my-app` for `my-app.metered.live`; the full domain works too). Credentials are fetched by the server. |
 | `TURN_KEY_ID` / `TURN_KEY_API_TOKEN` | – | Cloudflare Realtime TURN instead — a far larger free allowance, but signup asks for a card. |
 | `TURN_URLS` / `TURN_USERNAME` / `TURN_CREDENTIAL` | – | Any static relay instead (coturn, Metered, Xirsys), comma-separated URLs. All three needed. `TURN_URL` is still accepted for a single entry. |

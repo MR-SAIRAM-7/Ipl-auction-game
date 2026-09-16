@@ -3,6 +3,7 @@
  * The server never trusts a client for money or timing - it only forwards intent.
  */
 import { MAX_LOT_SEC, MIN_LOT_SEC, TEAM_COLORS, getRoom, loadRoom, persistRoom } from '../services/roomStore.js';
+import { FORMATS } from '../data/formats.js';
 import {
   MAX_MEMBERS_PER_TEAM,
   MAX_TEAMS_PER_ROOM,
@@ -16,6 +17,7 @@ import {
   closeLot,
   disposeRoomTimers,
   finishAuction,
+  submitTeamXI,
   maxAffordable,
   passLot,
   pauseRoom,
@@ -199,6 +201,7 @@ export function registerSockets(io) {
             members: [{ id: newMemberId(), playerId, name: personName, isOwner: true, connected: true }],
             purse: room.settings.purse,
             squad: [],
+            xi: null,
             connected: true,
             isHost: false,
           };
@@ -315,6 +318,9 @@ export function registerSockets(io) {
         return Number.isFinite(x) ? Math.min(max, Math.max(min, Math.round(x))) : fallback;
       };
       const s = room.settings;
+      // The format drives the squad shape, the pool and the whole verdict, so it has
+      // to be validated against the known list rather than taken on trust.
+      if (payload.format && FORMATS[payload.format]) s.format = payload.format;
       s.purse = n(payload.purse, 10 * 100000, s.maxBid, s.purse);
       s.squadSize = n(payload.squadSize, 5, 25, s.squadSize);
       s.minSquad = n(payload.minSquad, 3, s.squadSize, Math.min(s.minSquad, s.squadSize));
@@ -370,6 +376,22 @@ export function registerSockets(io) {
       if (room.hostId !== socket.data?.playerId) return ack?.({ error: 'Only the host can end the auction.' });
       ack?.({ ok: true });
       return finishAuction(io, room, 'The host ended the auction early.');
+    });
+
+    /** A franchise names the side it wants judged, once the auction has closed. */
+    socket.on('auction:xi', (payload = {}, ack) => {
+      const room = getRoom(socket.data?.code);
+      if (!room) return ack?.({ error: 'Room not found.' });
+      const team = room.teams.find((t) => t.id === socket.data?.teamId);
+      if (!team) return ack?.({ error: 'You are spectating.' });
+      if (!bidLimiter.take(socket.id).ok) return ack?.({ error: 'Slow down a moment.' });
+      const result = submitTeamXI(io, room, team, {
+        xiIds: Array.isArray(payload.xiIds) ? payload.xiIds.slice(0, 20).map(String) : [],
+        captainId: payload.captainId ? String(payload.captainId) : null,
+        keeperId: payload.keeperId ? String(payload.keeperId) : null,
+        impactId: payload.impactId ? String(payload.impactId) : null,
+      });
+      return ack?.(result.ok ? { ok: true } : { error: result.errors[0], errors: result.errors });
     });
 
     socket.on('auction:reset', (_p, ack) => {
