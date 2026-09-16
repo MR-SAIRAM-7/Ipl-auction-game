@@ -45,14 +45,19 @@ services:
 
       # TURN relay. Voice works on home wifi without it, but two people on MOBILE
       # DATA have no direct path to each other and need a relay to connect at all.
-      # Cloudflare Realtime has the largest free allowance (1,000 GB/month) - create a
-      # TURN key in the dashboard and set these two.
+      # Metered Open Relay is the easiest: 20 GB/month free and no credit card.
+      - key: METERED_APP_NAME
+        sync: false
+      - key: METERED_API_KEY
+        sync: false
+
+      # Or Cloudflare Realtime - 1,000 GB/month free, but signup asks for a card.
       - key: TURN_KEY_ID
         sync: false
       - key: TURN_KEY_API_TOKEN
         sync: false
 
-      # Or a static relay instead (coturn, Metered, Xirsys). All three are needed.
+      # Or a static relay instead (coturn, Xirsys). All three are needed.
       # Comma-separated; list udp, tcp and a turns:443 entry for restrictive networks.
       - key: TURN_URLS
         sync: false
